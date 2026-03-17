@@ -1,0 +1,41 @@
+# =============================================================================
+# Bedrock AgentCore Configuration
+# =============================================================================
+#
+# This file configures the MCP server for deployment to AWS Bedrock AgentCore.
+# See: https://docs.aws.amazon.com/bedrock/latest/userguide/agentcore.html
+
+# AgentCore runtime name (must match Terraform configuration)
+runtime_name: my-mcp-server
+
+# Container configuration
+container:
+  # ECR repository URI (populated by Terraform output)
+  # repository: <account>.dkr.ecr.<region>.amazonaws.com/bedrock-agentcore-my-mcp-server-dev
+  tag: latest
+  architecture: ARM64  # or X86_64
+
+# Network configuration
+network:
+  mode: PUBLIC  # PUBLIC or VPC
+
+# Server configuration
+server:
+  host: 0.0.0.0
+  port: 8000
+  path: /mcp
+  transport: streamable-http
+  stateless: true
+
+# Environment variables (non-sensitive)
+environment:
+  MCP_SERVER_NAME: my-mcp-server
+  MCP_LOG_LEVEL: INFO
+  MCP_LOG_FORMAT: json
+  OPENSEARCH_INDEX: documents
+  OPENSEARCH_AUTH_MODE: aws
+
+# Secrets (reference AWS Secrets Manager)
+secrets:
+  # API keys are retrieved from Secrets Manager at runtime
+  # secret_name: mcp/my-mcp-server/api-keys

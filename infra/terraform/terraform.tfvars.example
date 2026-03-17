@@ -1,0 +1,24 @@
+# =============================================================================
+# Terraform Variables Example
+# Copy this to terraform.tfvars and fill in your values
+# =============================================================================
+
+# Required
+project_name               = "my-mcp-server"
+opensearch_master_password = "CHANGE_ME_SecurePassword123!"
+
+# Optional - uncomment to customize
+# aws_region                = "us-east-2"
+# environment               = "dev"
+# opensearch_index_name     = "documents"
+# opensearch_instance_type  = "r6g.large.search"
+# opensearch_instance_count = 2
+# opensearch_volume_size    = 100
+# container_image_tag       = "latest"
+# alarm_email               = "alerts@example.com"
+
+# Additional tags
+# tags = {
+#   Team    = "platform"
+#   CostCenter = "engineering"
+# }
