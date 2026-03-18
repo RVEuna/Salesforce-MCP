@@ -8,17 +8,6 @@ output "ecr_repository_url" {
   value       = module.foundation.ecr_repository_url
 }
 
-# OpenSearch
-output "opensearch_endpoint" {
-  description = "OpenSearch domain endpoint"
-  value       = module.opensearch.endpoint
-}
-
-output "opensearch_dashboard_url" {
-  description = "OpenSearch Dashboards URL"
-  value       = module.opensearch.dashboard_url
-}
-
 # AgentCore
 output "agentcore_runtime_id" {
   description = "AgentCore runtime ID"
@@ -48,11 +37,12 @@ output "next_steps" {
        docker build -t ${module.foundation.ecr_repository_url}:${var.container_image_tag} .
        docker push ${module.foundation.ecr_repository_url}:${var.container_image_tag}
 
-    2. Update your .env with:
-       OPENSEARCH_ENDPOINT=${module.opensearch.endpoint}
-       OPENSEARCH_AUTH_MODE=aws
+    2. Update your .env with Salesforce Connected App credentials:
+       SALESFORCE_INSTANCE_URL=https://myorg.my.salesforce.com
+       SALESFORCE_CLIENT_ID=<your consumer key>
+       SALESFORCE_CLIENT_SECRET=<your consumer secret>
 
-    3. Test locally with AWS credentials, then deploy to AgentCore.
+    3. Test locally, then deploy to AgentCore.
 
   EOT
 }

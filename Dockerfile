@@ -2,8 +2,8 @@
 # MCP Server Dockerfile for AWS Bedrock AgentCore
 # =============================================================================
 #
-# Build: docker build -t my-mcp-server:latest .
-# Run locally: docker run -p 8000:8000 --env-file .env my-mcp-server:latest
+# Build: docker build -t salesforce-mcp-server:latest .
+# Run locally: docker run -p 8000:8000 --env-file .env salesforce-mcp-server:latest
 
 FROM python:3.13-slim
 

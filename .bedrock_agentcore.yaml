@@ -6,12 +6,12 @@
 # See: https://docs.aws.amazon.com/bedrock/latest/userguide/agentcore.html
 
 # AgentCore runtime name (must match Terraform configuration)
-runtime_name: my-mcp-server
+runtime_name: salesforce-mcp-server
 
 # Container configuration
 container:
   # ECR repository URI (populated by Terraform output)
-  # repository: <account>.dkr.ecr.<region>.amazonaws.com/bedrock-agentcore-my-mcp-server-dev
+  # repository: <account>.dkr.ecr.<region>.amazonaws.com/bedrock-agentcore-salesforce-mcp-server-dev
   tag: latest
   architecture: ARM64  # or X86_64
 
@@ -29,13 +29,13 @@ server:
 
 # Environment variables (non-sensitive)
 environment:
-  MCP_SERVER_NAME: my-mcp-server
+  MCP_SERVER_NAME: salesforce-mcp-server
   MCP_LOG_LEVEL: INFO
   MCP_LOG_FORMAT: json
-  OPENSEARCH_INDEX: documents
-  OPENSEARCH_AUTH_MODE: aws
+  SALESFORCE_INSTANCE_URL: https://myorg.my.salesforce.com
+  SALESFORCE_API_VERSION: v66.0
 
 # Secrets (reference AWS Secrets Manager)
 secrets:
-  # API keys are retrieved from Secrets Manager at runtime
-  # secret_name: mcp/my-mcp-server/api-keys
+  # API keys and Salesforce credentials are retrieved from Secrets Manager at runtime
+  # secret_name: mcp/salesforce-mcp-server/api-keys

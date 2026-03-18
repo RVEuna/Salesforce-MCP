@@ -8,11 +8,6 @@ variable "environment" {
   type        = string
 }
 
-variable "opensearch_domain_name" {
-  description = "OpenSearch domain name"
-  type        = string
-}
-
 variable "agentcore_runtime_name" {
   description = "AgentCore runtime name"
   type        = string

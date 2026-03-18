@@ -1,118 +1,85 @@
-"""Pytest fixtures for MCP server tests."""
+"""Pytest fixtures for Salesforce MCP server tests."""
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 
-class NotFoundError(Exception):
-    """Mock NotFoundError for testing."""
-
-    pass
-
-
 @pytest.fixture
-def mock_opensearch_client():
-    """Mock OpenSearch client for unit tests."""
-    client = MagicMock()
+def mock_salesforce_client():
+    """Mock SalesforceClient for unit tests."""
+    client = AsyncMock()
 
-    # Mock search response
+    client.query.return_value = {
+        "totalSize": 2,
+        "done": True,
+        "records": [
+            {"Id": "001xx000003DGbYAAW", "Name": "Acme Corp", "attributes": {"type": "Account"}},
+            {"Id": "001xx000003DGbZAAW", "Name": "Global Inc", "attributes": {"type": "Account"}},
+        ],
+    }
+
     client.search.return_value = {
-        "hits": {
-            "total": {"value": 2},
-            "hits": [
-                {
-                    "_id": "doc-1",
-                    "_score": 0.95,
-                    "_source": {
-                        "content": "Test document 1",
-                        "title": "Document 1",
-                    },
-                },
-                {
-                    "_id": "doc-2",
-                    "_score": 0.85,
-                    "_source": {
-                        "content": "Test document 2",
-                        "title": "Document 2",
-                    },
-                },
-            ],
-        }
-    }
-
-    # Mock get response
-    client.get.return_value = {
-        "_id": "doc-1",
-        "_source": {
-            "content": "Test document 1",
-            "title": "Document 1",
-            "related_ids": ["doc-2", "doc-3"],
-        },
-    }
-
-    # Mock mget response
-    client.mget.return_value = {
-        "docs": [
-            {
-                "_id": "doc-1",
-                "found": True,
-                "_source": {"content": "Document 1", "title": "Title 1"},
-            },
-            {
-                "_id": "doc-2",
-                "found": True,
-                "_source": {"content": "Document 2", "title": "Title 2"},
-            },
-            {
-                "_id": "doc-3",
-                "found": False,
-            },
+        "searchRecords": [
+            {"Id": "001xx000003DGbYAAW", "Name": "Acme Corp", "attributes": {"type": "Account"}},
         ]
     }
 
-    # Mock cluster health
-    client.cluster.health.return_value = {
-        "cluster_name": "test-cluster",
-        "status": "green",
-        "number_of_nodes": 2,
+    client.describe_global.return_value = {
+        "sobjects": [
+            {"name": "Account", "label": "Account", "queryable": True},
+            {"name": "Contact", "label": "Contact", "queryable": True},
+        ]
+    }
+
+    client.describe_sobject.return_value = {
+        "name": "Account",
+        "fields": [
+            {"name": "Id", "type": "id", "label": "Account ID"},
+            {"name": "Name", "type": "string", "label": "Account Name"},
+        ],
+        "childRelationships": [],
+        "recordTypeInfos": [],
+    }
+
+    client.get_record.return_value = {
+        "Id": "001xx000003DGbYAAW",
+        "Name": "Acme Corp",
+        "attributes": {"type": "Account"},
+    }
+
+    client.get_related_records.return_value = {
+        "totalSize": 1,
+        "done": True,
+        "records": [
+            {"Id": "003xx000004TmiQAAS", "Name": "John Doe", "attributes": {"type": "Contact"}},
+        ],
+    }
+
+    client.get_user_info.return_value = {
+        "id": "005xx000001X8zZAAS",
+        "name": "Test User",
+        "email": "test@example.com",
+        "username": "test@example.com.sandbox",
     }
 
     return client
 
 
 @pytest.fixture
-def mock_store(mock_opensearch_client):
-    """Mock OpenSearchStore for unit tests."""
-    with patch("mcp_server.store.opensearch.OpenSearch") as mock_class:
-        mock_class.return_value = mock_opensearch_client
-        from mcp_server.store import OpenSearchStore
-
-        store = OpenSearchStore()
-        store._client = mock_opensearch_client
-        yield store
+def mock_context():
+    """Mock FastMCP Context with a Bearer token in request headers."""
+    ctx = MagicMock()
+    ctx.request_context = MagicMock()
+    ctx.request_context.headers = {"authorization": "Bearer test_access_token_abc123"}
+    return ctx
 
 
 @pytest.fixture
-def sample_documents():
-    """Sample documents for testing."""
-    return [
-        {
-            "id": "doc-1",
-            "title": "Getting Started Guide",
-            "content": "This guide helps you get started with the platform.",
-            "related_ids": ["doc-2"],
-        },
-        {
-            "id": "doc-2",
-            "title": "API Reference",
-            "content": "Complete API reference documentation.",
-            "related_ids": ["doc-1", "doc-3"],
-        },
-        {
-            "id": "doc-3",
-            "title": "Troubleshooting",
-            "content": "Common issues and how to resolve them.",
-            "related_ids": [],
-        },
-    ]
+def patch_get_client(mock_salesforce_client):
+    """Patch get_salesforce_client to return the mock client."""
+    with patch(
+        "mcp_server.salesforce.auth.get_salesforce_client",
+        return_value=mock_salesforce_client,
+    ) as patched:
+        yield patched

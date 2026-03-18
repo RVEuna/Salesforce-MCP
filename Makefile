@@ -1,20 +1,17 @@
-.PHONY: help install dev-infra dev-server dev init-index seed-data test test-unit test-int lint format build deploy clean
+.PHONY: help install dev-server dev test test-unit test-int lint format build deploy clean
 
 help:
 	@echo "Available targets:"
 	@echo ""
 	@echo "  Development:"
 	@echo "    install      - Install dependencies"
-	@echo "    dev-infra    - Start local OpenSearch (Docker)"
 	@echo "    dev-server   - Run MCP server locally"
-	@echo "    dev          - Start infra, init index, run server"
-	@echo "    init-index   - Create OpenSearch index with mappings"
-	@echo "    seed-data    - Load sample documents"
+	@echo "    dev          - Install deps and run server"
 	@echo ""
 	@echo "  Testing:"
 	@echo "    test         - Run all tests"
 	@echo "    test-unit    - Run unit tests only"
-	@echo "    test-int     - Run integration tests"
+	@echo "    test-int     - Run integration tests (needs SALESFORCE_ACCESS_TOKEN)"
 	@echo ""
 	@echo "  Code Quality:"
 	@echo "    lint         - Run linter"
@@ -25,29 +22,17 @@ help:
 	@echo "    deploy       - Deploy to AgentCore"
 	@echo ""
 	@echo "  Cleanup:"
-	@echo "    clean        - Stop containers and clean up"
+	@echo "    clean        - Clean up caches"
 
 # Development
 install:
 	uv sync
 
-dev-infra:
-	docker compose up -d
-	@echo "Waiting for OpenSearch to be healthy..."
-	@until curl -s http://localhost:9200/_cluster/health | grep -q '"status"'; do sleep 2; done
-	@echo "OpenSearch is ready!"
-
 dev-server:
 	uv run python -m mcp_server.server
 
-dev: dev-infra init-index
+dev: install
 	$(MAKE) dev-server
-
-init-index:
-	uv run python scripts/init-index.py
-
-seed-data:
-	uv run python scripts/seed-data.py
 
 # Testing
 test:
@@ -69,7 +54,7 @@ format:
 
 # Deployment
 build:
-	docker build -t my-mcp-server:latest .
+	docker build -t salesforce-mcp-server:latest .
 
 deploy:
 	@echo "Deploying to AgentCore..."
@@ -79,6 +64,5 @@ deploy:
 
 # Cleanup
 clean:
-	docker compose down -v
 	rm -rf __pycache__ .pytest_cache .ruff_cache
 	find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true

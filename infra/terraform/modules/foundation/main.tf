@@ -147,29 +147,6 @@ resource "aws_iam_role_policy" "agentcore_secrets" {
   })
 }
 
-# OpenSearch Policy
-resource "aws_iam_role_policy" "agentcore_opensearch" {
-  name = "OpenSearchAccess"
-  role = aws_iam_role.agentcore_execution.id
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Effect = "Allow"
-        Action = [
-          "es:ESHttpGet",
-          "es:ESHttpPost",
-          "es:ESHttpPut",
-          "es:ESHttpDelete",
-          "es:ESHttpHead"
-        ]
-        Resource = ["arn:aws:es:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:domain/*"]
-      }
-    ]
-  })
-}
-
 # ECR Policy
 resource "aws_iam_role_policy" "agentcore_ecr" {
   name = "ECRAccess"

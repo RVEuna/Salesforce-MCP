@@ -2,11 +2,10 @@
 # MCP Server Infrastructure - Root Module
 # =============================================================================
 #
-# This deploys an MCP server to AWS Bedrock AgentCore with OpenSearch backend.
+# This deploys a Salesforce MCP server to AWS Bedrock AgentCore.
 #
 # Resources created:
 # - ECR repository for container images
-# - OpenSearch managed domain for document storage
 # - AgentCore runtime for MCP server hosting
 # - IAM roles and policies
 # - CloudWatch dashboards and alarms
@@ -65,27 +64,6 @@ module "foundation" {
 }
 
 # =============================================================================
-# OpenSearch Managed Domain
-# =============================================================================
-module "opensearch" {
-  source = "./modules/opensearch"
-
-  domain_name   = var.project_name
-  environment   = var.environment
-  index_name    = var.opensearch_index_name
-  instance_type = var.opensearch_instance_type
-  instance_count = var.opensearch_instance_count
-  volume_size   = var.opensearch_volume_size
-
-  master_user_name     = var.opensearch_master_user
-  master_user_password = var.opensearch_master_password
-
-  agentcore_execution_role_arn = module.foundation.agentcore_execution_role_arn
-
-  tags = var.tags
-}
-
-# =============================================================================
 # AgentCore Runtime
 # =============================================================================
 module "agentcore" {
@@ -103,7 +81,7 @@ module "agentcore" {
 
   tags = var.tags
 
-  depends_on = [module.foundation, module.opensearch]
+  depends_on = [module.foundation]
 }
 
 # =============================================================================
@@ -115,7 +93,6 @@ module "monitoring" {
   project_name = var.project_name
   environment  = var.environment
 
-  opensearch_domain_name = module.opensearch.domain_name
   agentcore_runtime_name = "${var.project_name}-${var.environment}"
 
   alarm_email = var.alarm_email

@@ -1,218 +1,178 @@
-"""Unit tests for MCP tools."""
+"""Unit tests for Salesforce MCP tools."""
 
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
-
-class TestEchoTool:
-    """Tests for echo tool."""
-
-    def test_echo_returns_message(self):
-        """Test echo returns the input message."""
-        from mcp_server.tools.echo import register_echo_tool
-
-        # Create mock MCP and execute_tool
-        mock_mcp = MagicMock()
-        captured_tool = None
-
-        def capture_decorator():
-            def decorator(func):
-                nonlocal captured_tool
-                captured_tool = func
-                return func
-
-            return decorator
-
-        mock_mcp.tool = capture_decorator
-
-        # Register the tool
-        register_echo_tool(mock_mcp, lambda name, args, fn: fn())
-
-        # Call the captured tool
-        result = captured_tool("Hello, World!")
-
-        assert result["message"] == "Hello, World!"
-        assert result["length"] == 13
-        assert result["tool"] == "echo"
+import pytest
 
 
-class TestSearchTool:
-    """Tests for search tool."""
+def _make_mcp_and_capture():
+    """Create a mock MCP server and capture the registered tool function."""
+    mock_mcp = MagicMock()
+    captured = {}
 
-    def test_search_calls_store(self, mock_store):
-        """Test search tool calls store.search."""
-        from mcp_server.tools.search import register_search_tool
+    def capture_decorator():
+        def decorator(func):
+            captured["tool"] = func
+            return func
+        return decorator
 
-        mock_mcp = MagicMock()
-        captured_tool = None
+    mock_mcp.tool = capture_decorator
+    return mock_mcp, captured
 
-        def capture_decorator():
-            def decorator(func):
-                nonlocal captured_tool
-                captured_tool = func
-                return func
 
-            return decorator
+class TestSoqlQueryTool:
+    @pytest.mark.asyncio
+    async def test_soql_query_calls_client(self, mock_salesforce_client, mock_context):
+        mock_mcp, captured = _make_mcp_and_capture()
 
-        mock_mcp.tool = capture_decorator
+        with patch(
+            "mcp_server.tools.soql_query.get_salesforce_client",
+            return_value=mock_salesforce_client,
+        ):
+            from mcp_server.tools.soql_query import register_soql_query_tool
 
-        register_search_tool(
-            mock_mcp,
-            lambda: mock_store,
-            lambda name, args, fn: fn(),
+            register_soql_query_tool(mock_mcp)
+            result = await captured["tool"]("SELECT Id FROM Account", ctx=mock_context)
+
+        assert result["totalSize"] == 2
+        assert len(result["records"]) == 2
+        mock_salesforce_client.query.assert_awaited_once_with("SELECT Id FROM Account")
+
+
+class TestSoslSearchTool:
+    @pytest.mark.asyncio
+    async def test_sosl_search_calls_client(self, mock_salesforce_client, mock_context):
+        mock_mcp, captured = _make_mcp_and_capture()
+
+        with patch(
+            "mcp_server.tools.sosl_search.get_salesforce_client",
+            return_value=mock_salesforce_client,
+        ):
+            from mcp_server.tools.sosl_search import register_sosl_search_tool
+
+            register_sosl_search_tool(mock_mcp)
+            result = await captured["tool"]("FIND {Acme}", ctx=mock_context)
+
+        assert "searchRecords" in result
+        mock_salesforce_client.search.assert_awaited_once_with("FIND {Acme}")
+
+
+class TestDescribeGlobalTool:
+    @pytest.mark.asyncio
+    async def test_describe_global_calls_client(self, mock_salesforce_client, mock_context):
+        mock_mcp, captured = _make_mcp_and_capture()
+
+        with patch(
+            "mcp_server.tools.describe_global.get_salesforce_client",
+            return_value=mock_salesforce_client,
+        ):
+            from mcp_server.tools.describe_global import register_describe_global_tool
+
+            register_describe_global_tool(mock_mcp)
+            result = await captured["tool"](ctx=mock_context)
+
+        assert "sobjects" in result
+        assert len(result["sobjects"]) == 2
+        mock_salesforce_client.describe_global.assert_awaited_once()
+
+
+class TestDescribeSobjectTool:
+    @pytest.mark.asyncio
+    async def test_describe_sobject_calls_client(self, mock_salesforce_client, mock_context):
+        mock_mcp, captured = _make_mcp_and_capture()
+
+        with patch(
+            "mcp_server.tools.describe_sobject.get_salesforce_client",
+            return_value=mock_salesforce_client,
+        ):
+            from mcp_server.tools.describe_sobject import register_describe_sobject_tool
+
+            register_describe_sobject_tool(mock_mcp)
+            result = await captured["tool"]("Account", ctx=mock_context)
+
+        assert result["name"] == "Account"
+        assert "fields" in result
+        mock_salesforce_client.describe_sobject.assert_awaited_once_with("Account")
+
+
+class TestGetRecordTool:
+    @pytest.mark.asyncio
+    async def test_get_record_calls_client(self, mock_salesforce_client, mock_context):
+        mock_mcp, captured = _make_mcp_and_capture()
+
+        with patch(
+            "mcp_server.tools.get_record.get_salesforce_client",
+            return_value=mock_salesforce_client,
+        ):
+            from mcp_server.tools.get_record import register_get_record_tool
+
+            register_get_record_tool(mock_mcp)
+            result = await captured["tool"](
+                "Account", "001xx000003DGbYAAW", ctx=mock_context
+            )
+
+        assert result["Id"] == "001xx000003DGbYAAW"
+        assert result["Name"] == "Acme Corp"
+        mock_salesforce_client.get_record.assert_awaited_once_with(
+            "Account", "001xx000003DGbYAAW", None
         )
 
-        result = captured_tool("test query", limit=5)
+    @pytest.mark.asyncio
+    async def test_get_record_with_fields(self, mock_salesforce_client, mock_context):
+        mock_mcp, captured = _make_mcp_and_capture()
 
-        assert "results" in result
-        assert "total" in result
-        assert result["query"] == "test query"
+        with patch(
+            "mcp_server.tools.get_record.get_salesforce_client",
+            return_value=mock_salesforce_client,
+        ):
+            from mcp_server.tools.get_record import register_get_record_tool
 
-    def test_search_with_invalid_filters_returns_error(self, mock_store):
-        """Test search with invalid JSON filters."""
-        from mcp_server.tools.search import register_search_tool
+            register_get_record_tool(mock_mcp)
+            result = await captured["tool"](
+                "Account", "001xx000003DGbYAAW", ctx=mock_context, fields=["Id", "Name"]
+            )
 
-        mock_mcp = MagicMock()
-        captured_tool = None
-
-        def capture_decorator():
-            def decorator(func):
-                nonlocal captured_tool
-                captured_tool = func
-                return func
-
-            return decorator
-
-        mock_mcp.tool = capture_decorator
-
-        register_search_tool(
-            mock_mcp,
-            lambda: mock_store,
-            lambda name, args, fn: fn(),
+        mock_salesforce_client.get_record.assert_awaited_once_with(
+            "Account", "001xx000003DGbYAAW", ["Id", "Name"]
         )
 
-        result = captured_tool("test", filters="not valid json")
 
-        assert "error" in result
+class TestGetRelatedRecordsTool:
+    @pytest.mark.asyncio
+    async def test_get_related_records_calls_client(self, mock_salesforce_client, mock_context):
+        mock_mcp, captured = _make_mcp_and_capture()
 
+        with patch(
+            "mcp_server.tools.get_related_records.get_salesforce_client",
+            return_value=mock_salesforce_client,
+        ):
+            from mcp_server.tools.get_related_records import register_get_related_records_tool
 
-class TestLookupTool:
-    """Tests for lookup tool."""
+            register_get_related_records_tool(mock_mcp)
+            result = await captured["tool"](
+                "Account", "001xx000003DGbYAAW", "Contacts", ctx=mock_context
+            )
 
-    def test_lookup_found(self, mock_store):
-        """Test lookup returns document when found."""
-        from mcp_server.tools.lookup import register_lookup_tool
-
-        mock_mcp = MagicMock()
-        captured_tool = None
-
-        def capture_decorator():
-            def decorator(func):
-                nonlocal captured_tool
-                captured_tool = func
-                return func
-
-            return decorator
-
-        mock_mcp.tool = capture_decorator
-
-        register_lookup_tool(
-            mock_mcp,
-            lambda: mock_store,
-            lambda name, args, fn: fn(),
+        assert result["totalSize"] == 1
+        mock_salesforce_client.get_related_records.assert_awaited_once_with(
+            "Account", "001xx000003DGbYAAW", "Contacts", None
         )
 
-        result = captured_tool("doc-1")
 
-        assert result["found"] is True
-        assert result["document"] is not None
-        assert result["document_id"] == "doc-1"
+class TestGetUserInfoTool:
+    @pytest.mark.asyncio
+    async def test_get_user_info_calls_client(self, mock_salesforce_client, mock_context):
+        mock_mcp, captured = _make_mcp_and_capture()
 
-    def test_lookup_not_found(self, mock_store):
-        """Test lookup returns not found message."""
-        from mcp_server.tools.lookup import register_lookup_tool
+        with patch(
+            "mcp_server.tools.get_user_info.get_salesforce_client",
+            return_value=mock_salesforce_client,
+        ):
+            from mcp_server.tools.get_user_info import register_get_user_info_tool
 
-        mock_store.get_by_id = MagicMock(return_value=None)
+            register_get_user_info_tool(mock_mcp)
+            result = await captured["tool"](ctx=mock_context)
 
-        mock_mcp = MagicMock()
-        captured_tool = None
-
-        def capture_decorator():
-            def decorator(func):
-                nonlocal captured_tool
-                captured_tool = func
-                return func
-
-            return decorator
-
-        mock_mcp.tool = capture_decorator
-
-        register_lookup_tool(
-            mock_mcp,
-            lambda: mock_store,
-            lambda name, args, fn: fn(),
-        )
-
-        result = captured_tool("nonexistent")
-
-        assert result["found"] is False
-        assert result["document"] is None
-
-
-class TestBatchLookupTool:
-    """Tests for batch_lookup tool."""
-
-    def test_batch_lookup_returns_multiple_docs(self, mock_store):
-        """Test batch_lookup returns multiple documents."""
-        from mcp_server.tools.batch_lookup import register_batch_lookup_tool
-
-        mock_mcp = MagicMock()
-        captured_tool = None
-
-        def capture_decorator():
-            def decorator(func):
-                nonlocal captured_tool
-                captured_tool = func
-                return func
-
-            return decorator
-
-        mock_mcp.tool = capture_decorator
-
-        register_batch_lookup_tool(
-            mock_mcp,
-            lambda: mock_store,
-            lambda name, args, fn: fn(),
-        )
-
-        result = captured_tool("doc-1,doc-2,doc-3")
-
-        assert "documents" in result
-        assert result["requested_count"] == 3
-        assert result["found_count"] == 2  # doc-3 not found in mock
-
-    def test_batch_lookup_empty_input(self, mock_store):
-        """Test batch_lookup with empty input."""
-        from mcp_server.tools.batch_lookup import register_batch_lookup_tool
-
-        mock_mcp = MagicMock()
-        captured_tool = None
-
-        def capture_decorator():
-            def decorator(func):
-                nonlocal captured_tool
-                captured_tool = func
-                return func
-
-            return decorator
-
-        mock_mcp.tool = capture_decorator
-
-        register_batch_lookup_tool(
-            mock_mcp,
-            lambda: mock_store,
-            lambda name, args, fn: fn(),
-        )
-
-        result = captured_tool("")
-
-        assert "error" in result
+        assert result["name"] == "Test User"
+        assert result["email"] == "test@example.com"
+        mock_salesforce_client.get_user_info.assert_awaited_once()
