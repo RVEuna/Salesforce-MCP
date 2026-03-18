@@ -8,6 +8,12 @@ variable "environment" {
   type        = string
 }
 
+variable "execution_role_arn" {
+  description = "Existing IAM role ARN. When provided, IAM roles are not created."
+  type        = string
+  default     = ""
+}
+
 variable "api_key" {
   description = "API key to store in Secrets Manager"
   type        = string

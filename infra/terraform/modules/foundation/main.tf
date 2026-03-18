@@ -71,8 +71,15 @@ resource "aws_secretsmanager_secret_version" "api_keys" {
 
 # =============================================================================
 # IAM Role - AgentCore Execution Role
+# Skipped when var.execution_role_arn is provided (reuse existing role).
 # =============================================================================
+locals {
+  create_iam_roles = var.execution_role_arn == ""
+}
+
 data "aws_iam_policy_document" "agentcore_assume_role" {
+  count = local.create_iam_roles ? 1 : 0
+
   statement {
     effect = "Allow"
     principals {
@@ -87,9 +94,11 @@ data "aws_iam_policy_document" "agentcore_assume_role" {
 }
 
 resource "aws_iam_role" "agentcore_execution" {
+  count = local.create_iam_roles ? 1 : 0
+
   name               = "AgentCoreExecutionRole-${var.project_name}-${var.environment}"
   description        = "Execution role for Bedrock AgentCore runtime"
-  assume_role_policy = data.aws_iam_policy_document.agentcore_assume_role.json
+  assume_role_policy = data.aws_iam_policy_document.agentcore_assume_role[0].json
 
   tags = merge(var.tags, {
     Name = "AgentCoreExecutionRole-${var.project_name}-${var.environment}"
@@ -97,14 +106,17 @@ resource "aws_iam_role" "agentcore_execution" {
 }
 
 resource "aws_iam_role_policy_attachment" "agentcore_ecs_task" {
-  role       = aws_iam_role.agentcore_execution.name
+  count = local.create_iam_roles ? 1 : 0
+
+  role       = aws_iam_role.agentcore_execution[0].name
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
 }
 
-# CloudWatch Logs Policy
 resource "aws_iam_role_policy" "agentcore_cloudwatch" {
+  count = local.create_iam_roles ? 1 : 0
+
   name = "CloudWatchLogsAccess"
-  role = aws_iam_role.agentcore_execution.id
+  role = aws_iam_role.agentcore_execution[0].id
 
   policy = jsonencode({
     Version = "2012-10-17"
@@ -127,10 +139,11 @@ resource "aws_iam_role_policy" "agentcore_cloudwatch" {
   })
 }
 
-# Secrets Manager Policy
 resource "aws_iam_role_policy" "agentcore_secrets" {
+  count = local.create_iam_roles ? 1 : 0
+
   name = "SecretsManagerAccess"
-  role = aws_iam_role.agentcore_execution.id
+  role = aws_iam_role.agentcore_execution[0].id
 
   policy = jsonencode({
     Version = "2012-10-17"
@@ -147,10 +160,11 @@ resource "aws_iam_role_policy" "agentcore_secrets" {
   })
 }
 
-# ECR Policy
 resource "aws_iam_role_policy" "agentcore_ecr" {
+  count = local.create_iam_roles ? 1 : 0
+
   name = "ECRAccess"
-  role = aws_iam_role.agentcore_execution.id
+  role = aws_iam_role.agentcore_execution[0].id
 
   policy = jsonencode({
     Version = "2012-10-17"
@@ -175,8 +189,11 @@ resource "aws_iam_role_policy" "agentcore_ecr" {
 
 # =============================================================================
 # IAM Role - CodeBuild Role
+# Skipped when using an existing execution role.
 # =============================================================================
 data "aws_iam_policy_document" "codebuild_assume_role" {
+  count = local.create_iam_roles ? 1 : 0
+
   statement {
     effect = "Allow"
     principals {
@@ -188,9 +205,11 @@ data "aws_iam_policy_document" "codebuild_assume_role" {
 }
 
 resource "aws_iam_role" "codebuild" {
+  count = local.create_iam_roles ? 1 : 0
+
   name               = "CodeBuildRole-${var.project_name}-${var.environment}"
   description        = "Role for CodeBuild to build and push container images"
-  assume_role_policy = data.aws_iam_policy_document.codebuild_assume_role.json
+  assume_role_policy = data.aws_iam_policy_document.codebuild_assume_role[0].json
 
   tags = merge(var.tags, {
     Name = "CodeBuildRole-${var.project_name}-${var.environment}"
@@ -198,8 +217,10 @@ resource "aws_iam_role" "codebuild" {
 }
 
 resource "aws_iam_role_policy" "codebuild_logs" {
+  count = local.create_iam_roles ? 1 : 0
+
   name = "CloudWatchLogsAccess"
-  role = aws_iam_role.codebuild.id
+  role = aws_iam_role.codebuild[0].id
 
   policy = jsonencode({
     Version = "2012-10-17"
@@ -218,8 +239,10 @@ resource "aws_iam_role_policy" "codebuild_logs" {
 }
 
 resource "aws_iam_role_policy" "codebuild_ecr" {
+  count = local.create_iam_roles ? 1 : 0
+
   name = "ECRPushAccess"
-  role = aws_iam_role.codebuild.id
+  role = aws_iam_role.codebuild[0].id
 
   policy = jsonencode({
     Version = "2012-10-17"
@@ -248,8 +271,10 @@ resource "aws_iam_role_policy" "codebuild_ecr" {
 }
 
 resource "aws_iam_role_policy" "codebuild_s3" {
+  count = local.create_iam_roles ? 1 : 0
+
   name = "S3SourceAccess"
-  role = aws_iam_role.codebuild.id
+  role = aws_iam_role.codebuild[0].id
 
   policy = jsonencode({
     Version = "2012-10-17"

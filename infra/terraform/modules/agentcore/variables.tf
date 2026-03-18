@@ -32,11 +32,19 @@ variable "execution_role_arn" {
 variable "codebuild_role_arn" {
   description = "IAM role ARN for CodeBuild"
   type        = string
+  default     = ""
 }
 
 variable "codebuild_source_bucket" {
   description = "S3 bucket for CodeBuild sources"
   type        = string
+  default     = ""
+}
+
+variable "create_codebuild" {
+  description = "Whether to create the CodeBuild project (requires codebuild_role_arn)"
+  type        = bool
+  default     = true
 }
 
 variable "network_mode" {

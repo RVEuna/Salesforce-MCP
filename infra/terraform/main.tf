@@ -54,8 +54,9 @@ provider "aws" {
 module "foundation" {
   source = "./modules/foundation"
 
-  project_name = var.project_name
-  environment  = var.environment
+  project_name       = var.project_name
+  environment        = var.environment
+  execution_role_arn = var.execution_role_arn
 
   # Optional: pre-populate API key secret
   # api_key = var.api_key
@@ -73,11 +74,12 @@ module "agentcore" {
   environment        = var.environment
   agent_runtime_name = var.project_name
 
-  ecr_repository_url  = module.foundation.ecr_repository_url
-  container_image_tag = var.container_image_tag
-  execution_role_arn  = module.foundation.agentcore_execution_role_arn
-  codebuild_role_arn  = module.foundation.codebuild_role_arn
+  ecr_repository_url      = module.foundation.ecr_repository_url
+  container_image_tag     = var.container_image_tag
+  execution_role_arn      = module.foundation.agentcore_execution_role_arn
+  codebuild_role_arn      = module.foundation.codebuild_role_arn
   codebuild_source_bucket = module.foundation.codebuild_source_bucket
+  create_codebuild        = var.execution_role_arn == ""
 
   tags = var.tags
 

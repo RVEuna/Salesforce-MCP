@@ -20,6 +20,12 @@ variable "environment" {
 }
 
 # AgentCore Configuration
+variable "execution_role_arn" {
+  description = "Existing IAM role ARN for AgentCore execution. If provided, skips IAM role creation (useful when you lack iam:CreateRole permissions)."
+  type        = string
+  default     = ""
+}
+
 variable "container_image_tag" {
   description = "Docker image tag for the MCP server"
   type        = string

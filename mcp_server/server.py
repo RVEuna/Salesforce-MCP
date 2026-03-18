@@ -32,6 +32,56 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 from mcp_server.config import mcp_settings, salesforce_settings
 from mcp_server.oauth.routes import oauth_routes
 
+
+def _load_aws_secrets() -> None:
+    """Load Salesforce and MCP credentials from AWS Secrets Manager.
+
+    Called at server startup when MCP_SECRET_PROVIDER=aws. Mutates the
+    module-level settings singletons so all subsequent request handlers
+    see the correct values without a process restart.
+    """
+    import boto3
+    import botocore.exceptions
+
+    secret_name = mcp_settings.aws_secret_name
+    region = mcp_settings.aws_secret_region
+    logger.info(f"Loading secrets from AWS Secrets Manager: {secret_name} ({region})")
+
+    try:
+        client = boto3.client("secretsmanager", region_name=region)
+        response = client.get_secret_value(SecretId=secret_name)
+        secret = json.loads(response["SecretString"])
+    except botocore.exceptions.ClientError as exc:
+        logger.error(f"Failed to fetch secret {secret_name!r}: {exc}")
+        raise RuntimeError(f"Could not load required secrets from AWS: {exc}") from exc
+    except (KeyError, json.JSONDecodeError) as exc:
+        logger.error(f"Secret {secret_name!r} has unexpected format: {exc}")
+        raise RuntimeError(f"Secret {secret_name!r} is not valid JSON") from exc
+
+    # Populate Salesforce settings
+    if "SALESFORCE_INSTANCE_URL" in secret:
+        salesforce_settings.instance_url = secret["SALESFORCE_INSTANCE_URL"]
+    if "SALESFORCE_LOGIN_URL" in secret:
+        salesforce_settings.login_url = secret["SALESFORCE_LOGIN_URL"]
+    if "SALESFORCE_CLIENT_ID" in secret:
+        salesforce_settings.client_id = secret["SALESFORCE_CLIENT_ID"]
+    if "SALESFORCE_CLIENT_SECRET" in secret:
+        salesforce_settings.client_secret = secret["SALESFORCE_CLIENT_SECRET"]
+
+    # Optionally override MCP settings stored alongside Salesforce creds
+    if "MCP_JWT_SECRET" in secret:
+        mcp_settings.jwt_secret = secret["MCP_JWT_SECRET"]
+    if "MCP_BASE_URL" in secret:
+        mcp_settings.base_url = secret["MCP_BASE_URL"]
+
+    if not salesforce_settings.instance_url:
+        raise RuntimeError(
+            "SALESFORCE_INSTANCE_URL not found in secret or environment. "
+            f"Add it to the Secrets Manager secret: {secret_name}"
+        )
+
+    logger.info(f"Secrets loaded. Salesforce instance: {salesforce_settings.instance_url}")
+
 log_format = (
     "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
     if mcp_settings.log_format == "text"
@@ -126,6 +176,8 @@ mcp_app = mcp.streamable_http_app()
 
 @asynccontextmanager
 async def lifespan(app):
+    if mcp_settings.secret_provider == "aws":
+        _load_aws_secrets()
     async with mcp.session_manager.run():
         yield
 

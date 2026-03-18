@@ -32,7 +32,7 @@ class SalesforceSettings(BaseSettings):
         extra="ignore",
     )
 
-    instance_url: str
+    instance_url: str = ""
     login_url: str = "https://login.salesforce.com"
     client_id: str = ""
     client_secret: str = ""

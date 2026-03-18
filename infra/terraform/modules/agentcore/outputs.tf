@@ -15,7 +15,7 @@ output "runtime_status" {
 
 output "codebuild_project_name" {
   description = "CodeBuild project name"
-  value       = aws_codebuild_project.container_builder.name
+  value       = var.create_codebuild ? aws_codebuild_project.container_builder[0].name : ""
 }
 
 output "log_group_name" {
