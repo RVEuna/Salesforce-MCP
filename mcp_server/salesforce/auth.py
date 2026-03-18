@@ -8,13 +8,18 @@ Each tool call extracts the Bearer token from the inbound request and creates
 a per-request SalesforceClient scoped to that user's access.
 """
 
+import base64
+import hashlib
+import hmac
+import json
 import logging
+import time
 from urllib.parse import urlencode
 
 import httpx
 from mcp.server.fastmcp import Context
 
-from mcp_server.config import salesforce_settings
+from mcp_server.config import mcp_settings, salesforce_settings
 from mcp_server.salesforce.client import SalesforceClient
 
 logger = logging.getLogger(__name__)
@@ -176,3 +181,79 @@ async def exchange_code_for_token(code: str, redirect_uri: str) -> dict:
         raise ValueError(f"Salesforce token exchange failed: {response.text}")
 
     return response.json()
+
+
+# ---------------------------------------------------------------------------
+# Stateless OAuth state / signed-code helpers
+# ---------------------------------------------------------------------------
+
+def encode_oauth_state(
+    redirect_uri: str,
+    client_state: str | None = None,
+    code_challenge: str | None = None,
+) -> str:
+    """Pack the MCP client's OAuth params into a base64 blob for the Salesforce ``state``."""
+    payload = {"redirect_uri": redirect_uri}
+    if client_state:
+        payload["client_state"] = client_state
+    if code_challenge:
+        payload["code_challenge"] = code_challenge
+    return base64.urlsafe_b64encode(json.dumps(payload).encode()).decode()
+
+
+def decode_oauth_state(state_param: str) -> dict:
+    """Unpack the base64 state blob returned by Salesforce's callback."""
+    try:
+        return json.loads(base64.urlsafe_b64decode(state_param))
+    except Exception as exc:
+        raise ValueError(f"Invalid OAuth state parameter: {exc}") from exc
+
+
+def _hmac_sign(data: bytes) -> str:
+    """Produce a hex HMAC-SHA256 signature over *data* using the server secret."""
+    return hmac.new(
+        mcp_settings.jwt_secret.encode(),
+        data,
+        hashlib.sha256,
+    ).hexdigest()
+
+
+def issue_auth_code(sf_token_response: dict) -> str:
+    """Wrap a Salesforce token response in an HMAC-signed, time-limited code.
+
+    The returned opaque string can be handed to the MCP client as an
+    authorization ``code`` and later verified with ``redeem_auth_code``.
+    """
+    payload = {
+        "access_token": sf_token_response["access_token"],
+        "instance_url": sf_token_response.get("instance_url", salesforce_settings.instance_url),
+        "exp": int(time.time()) + mcp_settings.auth_code_ttl,
+    }
+    payload_b64 = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode()
+    sig = _hmac_sign(payload_b64.encode())
+    return f"{payload_b64}.{sig}"
+
+
+def redeem_auth_code(code: str) -> dict:
+    """Verify and unpack a signed auth code, returning the Salesforce token data.
+
+    Raises ``ValueError`` if the signature is invalid or the code has expired.
+    """
+    parts = code.split(".", 1)
+    if len(parts) != 2:
+        raise ValueError("Malformed auth code")
+
+    payload_b64, sig = parts
+    expected_sig = _hmac_sign(payload_b64.encode())
+    if not hmac.compare_digest(sig, expected_sig):
+        raise ValueError("Invalid auth code signature")
+
+    try:
+        payload = json.loads(base64.urlsafe_b64decode(payload_b64))
+    except Exception as exc:
+        raise ValueError(f"Cannot decode auth code payload: {exc}") from exc
+
+    if time.time() > payload.get("exp", 0):
+        raise ValueError("Auth code has expired")
+
+    return {"access_token": payload["access_token"], "instance_url": payload["instance_url"]}

@@ -39,7 +39,7 @@ dev = [
 mcp-server = "mcp_server.server:main"
 
 [tool.setuptools]
-packages = ["mcp_server", "mcp_server.config", "mcp_server.tools", "mcp_server.salesforce"]
+packages = ["mcp_server", "mcp_server.config", "mcp_server.tools", "mcp_server.salesforce", "mcp_server.oauth"]
 
 [tool.ruff]
 line-length = 100

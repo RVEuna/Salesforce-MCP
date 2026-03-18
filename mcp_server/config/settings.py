@@ -63,6 +63,11 @@ class MCPSettings(BaseSettings):
     log_level: str = "INFO"
     log_format: Literal["json", "text"] = "json"
 
+    # OAuth proxy (server acts as authorization server for MCP clients)
+    base_url: str = "http://localhost:8000"
+    jwt_secret: str = ""
+    auth_code_ttl: int = 300
+
     # Secrets (for API keys in production)
     secret_provider: Literal["aws", "local"] = "local"
     aws_secret_name: str = "mcp/api-keys"
