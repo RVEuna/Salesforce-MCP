@@ -24,6 +24,9 @@ dependencies = [
 
     # AWS (for Secrets Manager in production)
     "boto3>=1.34.0",
+
+    # Token encryption (Fernet = AES-128-CBC + HMAC-SHA256)
+    "cryptography>=44.0.0",
 ]
 
 [dependency-groups]

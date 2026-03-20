@@ -10,13 +10,13 @@ a per-request SalesforceClient scoped to that user's access.
 
 import base64
 import hashlib
-import hmac
 import json
 import logging
 import time
 from urllib.parse import urlencode
 
 import httpx
+from cryptography.fernet import Fernet, InvalidToken
 from mcp.server.fastmcp import Context
 
 from mcp_server.config import mcp_settings, salesforce_settings
@@ -31,8 +31,8 @@ def get_salesforce_client(ctx: Context) -> SalesforceClient:
     Called at the start of every tool to create a per-request client scoped
     to the authenticated user's Salesforce access token.
 
-    The Bearer token may be a compound token (HMAC-signed envelope with the
-    real SF access_token inside) or a raw SF token for local development.
+    The Bearer token may be an encrypted compound token (with the real SF
+    access_token inside) or a raw SF token for local development.
     """
     bearer = _extract_bearer_token(ctx)
 
@@ -253,17 +253,18 @@ def decode_oauth_state(state_param: str) -> dict:
         raise ValueError(f"Invalid OAuth state parameter: {exc}") from exc
 
 
-def _hmac_sign(data: bytes) -> str:
-    """Produce a hex HMAC-SHA256 signature over *data* using the server secret."""
-    return hmac.new(
-        mcp_settings.jwt_secret.encode(),
-        data,
-        hashlib.sha256,
-    ).hexdigest()
+def _get_fernet() -> Fernet:
+    """Derive a Fernet encryption key from the server secret.
+
+    Fernet requires a 32-byte URL-safe base64-encoded key.  We SHA-256 hash
+    the ``MCP_JWT_SECRET`` to get exactly 32 bytes, then base64-encode it.
+    """
+    key_bytes = hashlib.sha256(mcp_settings.jwt_secret.encode()).digest()
+    return Fernet(base64.urlsafe_b64encode(key_bytes))
 
 
 def issue_auth_code(sf_token_response: dict) -> str:
-    """Wrap a Salesforce token response in an HMAC-signed, time-limited code.
+    """Encrypt a Salesforce token response into a time-limited auth code.
 
     The returned opaque string can be handed to the MCP client as an
     authorization ``code`` and later verified with ``redeem_auth_code``.
@@ -274,29 +275,18 @@ def issue_auth_code(sf_token_response: dict) -> str:
         "instance_url": sf_token_response.get("instance_url", salesforce_settings.instance_url),
         "exp": int(time.time()) + mcp_settings.auth_code_ttl,
     }
-    payload_b64 = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode()
-    sig = _hmac_sign(payload_b64.encode())
-    return f"{payload_b64}.{sig}"
+    return _get_fernet().encrypt(json.dumps(payload).encode()).decode()
 
 
 def redeem_auth_code(code: str) -> dict:
-    """Verify and unpack a signed auth code, returning the Salesforce token data.
+    """Decrypt and unpack an auth code, returning the Salesforce token data.
 
-    Raises ``ValueError`` if the signature is invalid or the code has expired.
+    Raises ``ValueError`` if the code cannot be decrypted or has expired.
     """
-    parts = code.split(".", 1)
-    if len(parts) != 2:
-        raise ValueError("Malformed auth code")
-
-    payload_b64, sig = parts
-    expected_sig = _hmac_sign(payload_b64.encode())
-    if not hmac.compare_digest(sig, expected_sig):
-        raise ValueError("Invalid auth code signature")
-
     try:
-        payload = json.loads(base64.urlsafe_b64decode(payload_b64))
-    except Exception as exc:
-        raise ValueError(f"Cannot decode auth code payload: {exc}") from exc
+        payload = json.loads(_get_fernet().decrypt(code.encode()))
+    except (InvalidToken, Exception) as exc:
+        raise ValueError(f"Invalid auth code: {exc}") from exc
 
     if time.time() > payload.get("exp", 0):
         raise ValueError("Auth code has expired")
@@ -313,12 +303,12 @@ def redeem_auth_code(code: str) -> dict:
 # ---------------------------------------------------------------------------
 
 def issue_compound_token(sf_token_response: dict) -> str:
-    """Wrap Salesforce tokens in an HMAC-signed Bearer token.
+    """Encrypt Salesforce tokens into an opaque Bearer token.
 
-    The compound token is an opaque string that Claude stores and sends on
-    every MCP request.  The middleware can decode it to check ``iat`` against
-    ``access_token_ttl`` and return HTTP 401 when expired, triggering
-    Claude's refresh flow.
+    The compound token is a Fernet-encrypted string that Claude stores and
+    sends on every MCP request.  The middleware can decrypt it to check
+    ``iat`` against ``access_token_ttl`` and return HTTP 401 when expired,
+    triggering Claude's refresh flow.
     """
     payload = {
         "access_token": sf_token_response["access_token"],
@@ -326,28 +316,17 @@ def issue_compound_token(sf_token_response: dict) -> str:
         "instance_url": sf_token_response.get("instance_url", salesforce_settings.instance_url),
         "iat": int(time.time()),
     }
-    payload_b64 = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode()
-    sig = _hmac_sign(payload_b64.encode())
-    return f"{payload_b64}.{sig}"
+    return _get_fernet().encrypt(json.dumps(payload).encode()).decode()
 
 
 def decode_compound_token(token: str) -> dict:
-    """Verify HMAC signature and return the decoded compound token payload.
+    """Decrypt and return the compound token payload.
 
     Returns dict with ``access_token``, ``refresh_token``, ``instance_url``,
-    and ``iat``.  Raises ``ValueError`` on invalid format or signature.
+    and ``iat``.  Raises ``ValueError`` if the token cannot be decrypted.
     Does NOT check expiry — that is the middleware's responsibility.
     """
-    parts = token.split(".", 1)
-    if len(parts) != 2:
-        raise ValueError("Not a compound token")
-
-    payload_b64, sig = parts
-    expected_sig = _hmac_sign(payload_b64.encode())
-    if not hmac.compare_digest(sig, expected_sig):
-        raise ValueError("Invalid compound token signature")
-
     try:
-        return json.loads(base64.urlsafe_b64decode(payload_b64))
-    except Exception as exc:
-        raise ValueError(f"Cannot decode compound token payload: {exc}") from exc
+        return json.loads(_get_fernet().decrypt(token.encode()))
+    except (InvalidToken, Exception) as exc:
+        raise ValueError(f"Invalid compound token: {exc}") from exc
