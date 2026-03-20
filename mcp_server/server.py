@@ -20,6 +20,7 @@ Usage:
 import json
 import logging
 import sys
+import time
 from contextlib import asynccontextmanager
 
 import uvicorn
@@ -67,6 +68,8 @@ def _load_aws_secrets() -> None:
         salesforce_settings.client_id = secret["SALESFORCE_CLIENT_ID"]
     if "SALESFORCE_CLIENT_SECRET" in secret:
         salesforce_settings.client_secret = secret["SALESFORCE_CLIENT_SECRET"]
+    if "SALESFORCE_ACCESS_TOKEN_TTL" in secret:
+        salesforce_settings.access_token_ttl = int(secret["SALESFORCE_ACCESS_TOKEN_TTL"])
 
     # Optionally override MCP settings stored alongside Salesforce creds
     if "MCP_JWT_SECRET" in secret:
@@ -131,10 +134,13 @@ register_tools(mcp)
 
 
 class RequireBearerToken:
-    """ASGI middleware that returns 401 if no Authorization: Bearer header is present.
+    """ASGI middleware that enforces Bearer token presence and expiry.
 
-    This triggers mcp-remote / Claude.ai to start the OAuth flow instead of
-    connecting unauthenticated.
+    Returns 401 in two cases, both triggering Claude's OAuth/refresh flow:
+    1. No Authorization: Bearer header present.
+    2. Compound token is present but expired (iat + access_token_ttl < now).
+
+    Raw (non-compound) tokens are passed through for local dev compatibility.
     """
 
     def __init__(self, app: ASGIApp):
@@ -149,22 +155,38 @@ class RequireBearerToken:
         auth = headers.get(b"authorization", b"").decode()
 
         if not auth.lower().startswith("bearer "):
-            base = mcp_settings.base_url.rstrip("/")
-            body = json.dumps({"error": "unauthorized", "error_description": "Bearer token required"}).encode()
-            await send({
-                "type": "http.response.start",
-                "status": 401,
-                "headers": [
-                    [b"content-type", b"application/json"],
-                    [b"www-authenticate", b"Bearer"],
-                    [b"content-length", str(len(body)).encode()],
-                    [b"resource_metadata", f"{base}/.well-known/oauth-protected-resource".encode()],
-                ],
-            })
-            await send({"type": "http.response.body", "body": body})
+            await self._send_401(send, "Bearer token required")
             return
 
+        bearer_token = auth[7:].strip()
+
+        try:
+            from mcp_server.salesforce.auth import decode_compound_token
+            payload = decode_compound_token(bearer_token)
+            iat = payload.get("iat", 0)
+            if time.time() > iat + salesforce_settings.access_token_ttl:
+                logger.info("Compound token expired, returning 401 to trigger refresh")
+                await self._send_401(send, "Token expired")
+                return
+        except ValueError:
+            pass
+
         await self.app(scope, receive, send)
+
+    async def _send_401(self, send: Send, description: str) -> None:
+        base = mcp_settings.base_url.rstrip("/")
+        body = json.dumps({"error": "unauthorized", "error_description": description}).encode()
+        await send({
+            "type": "http.response.start",
+            "status": 401,
+            "headers": [
+                [b"content-type", b"application/json"],
+                [b"www-authenticate", b"Bearer"],
+                [b"content-length", str(len(body)).encode()],
+                [b"resource_metadata", f"{base}/.well-known/oauth-protected-resource".encode()],
+            ],
+        })
+        await send({"type": "http.response.body", "body": body})
 
 
 # =============================================================================

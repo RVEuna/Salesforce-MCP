@@ -30,11 +30,25 @@ def get_salesforce_client(ctx: Context) -> SalesforceClient:
 
     Called at the start of every tool to create a per-request client scoped
     to the authenticated user's Salesforce access token.
+
+    The Bearer token may be a compound token (HMAC-signed envelope with the
+    real SF access_token inside) or a raw SF token for local development.
     """
-    token = _extract_bearer_token(ctx)
+    bearer = _extract_bearer_token(ctx)
+
+    try:
+        payload = decode_compound_token(bearer)
+        sf_token = payload["access_token"]
+        instance_url = payload.get("instance_url", salesforce_settings.instance_url)
+        logger.debug("Using access_token from compound token")
+    except ValueError:
+        sf_token = bearer
+        instance_url = salesforce_settings.instance_url
+        logger.debug("Using raw bearer token (local dev or legacy)")
+
     return SalesforceClient(
-        access_token=token,
-        instance_url=salesforce_settings.instance_url,
+        access_token=sf_token,
+        instance_url=instance_url,
         api_version=salesforce_settings.api_version,
     )
 
@@ -146,6 +160,7 @@ def build_authorization_url(redirect_uri: str, state: str | None = None) -> str:
         "response_type": "code",
         "client_id": salesforce_settings.client_id,
         "redirect_uri": redirect_uri,
+        "scope": "api refresh_token",
     }
     if state:
         params["state"] = state
@@ -179,6 +194,35 @@ async def exchange_code_for_token(code: str, redirect_uri: str) -> dict:
     if response.status_code != 200:
         logger.error(f"Token exchange failed: {response.status_code} {response.text}")
         raise ValueError(f"Salesforce token exchange failed: {response.text}")
+
+    return response.json()
+
+
+async def refresh_salesforce_token(refresh_token: str) -> dict:
+    """Exchange a Salesforce refresh token for a new access token.
+
+    Called when the MCP client presents grant_type=refresh_token.
+    Returns the new token response from Salesforce.
+    Raises ValueError if the refresh token is invalid, expired, or revoked.
+    """
+    base = salesforce_settings.login_url.rstrip("/")
+    token_url = f"{base}/services/oauth2/token"
+
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            token_url,
+            data={
+                "grant_type": "refresh_token",
+                "refresh_token": refresh_token,
+                "client_id": salesforce_settings.client_id,
+                "client_secret": salesforce_settings.client_secret,
+            },
+            timeout=salesforce_settings.auth_timeout,
+        )
+
+    if response.status_code != 200:
+        logger.error(f"Token refresh failed: {response.status_code} {response.text}")
+        raise ValueError(f"Salesforce token refresh failed: {response.text}")
 
     return response.json()
 
@@ -226,6 +270,7 @@ def issue_auth_code(sf_token_response: dict) -> str:
     """
     payload = {
         "access_token": sf_token_response["access_token"],
+        "refresh_token": sf_token_response.get("refresh_token", ""),
         "instance_url": sf_token_response.get("instance_url", salesforce_settings.instance_url),
         "exp": int(time.time()) + mcp_settings.auth_code_ttl,
     }
@@ -256,4 +301,53 @@ def redeem_auth_code(code: str) -> dict:
     if time.time() > payload.get("exp", 0):
         raise ValueError("Auth code has expired")
 
-    return {"access_token": payload["access_token"], "instance_url": payload["instance_url"]}
+    return {
+        "access_token": payload["access_token"],
+        "refresh_token": payload.get("refresh_token", ""),
+        "instance_url": payload["instance_url"],
+    }
+
+
+# ---------------------------------------------------------------------------
+# Compound token helpers (Bearer token = signed envelope with both tokens)
+# ---------------------------------------------------------------------------
+
+def issue_compound_token(sf_token_response: dict) -> str:
+    """Wrap Salesforce tokens in an HMAC-signed Bearer token.
+
+    The compound token is an opaque string that Claude stores and sends on
+    every MCP request.  The middleware can decode it to check ``iat`` against
+    ``access_token_ttl`` and return HTTP 401 when expired, triggering
+    Claude's refresh flow.
+    """
+    payload = {
+        "access_token": sf_token_response["access_token"],
+        "refresh_token": sf_token_response.get("refresh_token", ""),
+        "instance_url": sf_token_response.get("instance_url", salesforce_settings.instance_url),
+        "iat": int(time.time()),
+    }
+    payload_b64 = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode()
+    sig = _hmac_sign(payload_b64.encode())
+    return f"{payload_b64}.{sig}"
+
+
+def decode_compound_token(token: str) -> dict:
+    """Verify HMAC signature and return the decoded compound token payload.
+
+    Returns dict with ``access_token``, ``refresh_token``, ``instance_url``,
+    and ``iat``.  Raises ``ValueError`` on invalid format or signature.
+    Does NOT check expiry — that is the middleware's responsibility.
+    """
+    parts = token.split(".", 1)
+    if len(parts) != 2:
+        raise ValueError("Not a compound token")
+
+    payload_b64, sig = parts
+    expected_sig = _hmac_sign(payload_b64.encode())
+    if not hmac.compare_digest(sig, expected_sig):
+        raise ValueError("Invalid compound token signature")
+
+    try:
+        return json.loads(base64.urlsafe_b64decode(payload_b64))
+    except Exception as exc:
+        raise ValueError(f"Cannot decode compound token payload: {exc}") from exc

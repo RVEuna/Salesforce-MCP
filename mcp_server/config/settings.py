@@ -39,6 +39,7 @@ class SalesforceSettings(BaseSettings):
     api_version: str = "v66.0"
     auth_timeout: int = 10
     access_token: str = ""
+    access_token_ttl: int = 7200
 
 
 class MCPSettings(BaseSettings):

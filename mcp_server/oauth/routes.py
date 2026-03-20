@@ -23,7 +23,9 @@ from mcp_server.salesforce.auth import (
     encode_oauth_state,
     exchange_code_for_token,
     issue_auth_code,
+    issue_compound_token,
     redeem_auth_code,
+    refresh_salesforce_token,
 )
 
 
@@ -48,7 +50,7 @@ async def oauth_metadata(request: Request) -> Response:
         "token_endpoint": f"{base}/oauth/token",
         "registration_endpoint": f"{base}/oauth/register",
         "response_types_supported": ["code"],
-        "grant_types_supported": ["authorization_code"],
+        "grant_types_supported": ["authorization_code", "refresh_token"],
         "token_endpoint_auth_methods_supported": ["none"],
         "code_challenge_methods_supported": ["S256"],
     })
@@ -138,26 +140,51 @@ async def oauth_callback(request: Request) -> Response:
 
 
 async def oauth_token(request: Request) -> Response:
-    """Exchange a signed auth code for the real Salesforce access token.
+    """Exchange a signed auth code or refresh token for a Salesforce access token.
 
-    The MCP client POSTs here with the ``code`` it received from the callback
-    redirect.  We verify the HMAC signature, check expiry, and return the
-    Salesforce access token as a standard OAuth token response.
+    Supports two grant types:
+    - ``authorization_code``: redeems the HMAC-signed code from the callback.
+    - ``refresh_token``: exchanges a Salesforce refresh token for a new access
+      token, enabling silent token renewal without user interaction.
     """
     form = await request.form()
-    code = form.get("code", "")
+    grant_type = str(form.get("grant_type", "authorization_code"))
 
+    if grant_type == "refresh_token":
+        old_refresh_token = str(form.get("refresh_token", ""))
+        if not old_refresh_token:
+            return JSONResponse({"error": "refresh_token is required"}, status_code=400)
+
+        try:
+            new_sf_tokens = await refresh_salesforce_token(old_refresh_token)
+        except ValueError:
+            return JSONResponse(
+                {"error": "invalid_grant", "error_description": "Refresh token is invalid or expired"},
+                status_code=400,
+            )
+
+        return JSONResponse({
+            "access_token": issue_compound_token(new_sf_tokens),
+            "refresh_token": new_sf_tokens.get("refresh_token", old_refresh_token),
+            "token_type": "Bearer",
+            "expires_in": salesforce_settings.access_token_ttl,
+            "scope": "api",
+        })
+
+    code = str(form.get("code", ""))
     if not code:
         return JSONResponse({"error": "code is required"}, status_code=400)
 
     try:
-        token_data = redeem_auth_code(str(code))
+        token_data = redeem_auth_code(code)
     except ValueError as exc:
         return JSONResponse({"error": str(exc)}, status_code=400)
 
     return JSONResponse({
-        "access_token": token_data["access_token"],
+        "access_token": issue_compound_token(token_data),
+        "refresh_token": token_data["refresh_token"],
         "token_type": "Bearer",
+        "expires_in": salesforce_settings.access_token_ttl,
         "scope": "api",
     })
 
