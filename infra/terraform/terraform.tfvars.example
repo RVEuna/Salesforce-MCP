@@ -12,6 +12,18 @@ project_name = "salesforce-mcp-server"
 # container_image_tag = "latest"
 # alarm_email         = "alerts@example.com"
 
+# Salesforce Connected App credentials (stored in Secrets Manager)
+salesforce_instance_url  = "https://myorg.my.salesforce.com"
+salesforce_login_url     = "https://login.salesforce.com"
+salesforce_client_id     = "<Connected App consumer key>"
+salesforce_client_secret = "<Connected App consumer secret>"
+# salesforce_api_version      = "v66.0"
+# salesforce_access_token_ttl = 7200
+
+# MCP credentials (stored in Secrets Manager)
+mcp_jwt_secret = "<generate with: python -c \"import secrets; print(secrets.token_hex(32))\">"
+mcp_base_url   = "https://<your-agentcore-endpoint>"
+
 # Additional tags
 # tags = {
 #   Team       = "platform"

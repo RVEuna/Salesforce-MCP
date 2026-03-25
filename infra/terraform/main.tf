@@ -58,8 +58,14 @@ module "foundation" {
   environment        = var.environment
   execution_role_arn = var.execution_role_arn
 
-  # Optional: pre-populate API key secret
-  # api_key = var.api_key
+  salesforce_instance_url     = var.salesforce_instance_url
+  salesforce_login_url        = var.salesforce_login_url
+  salesforce_client_id        = var.salesforce_client_id
+  salesforce_client_secret    = var.salesforce_client_secret
+  salesforce_api_version      = var.salesforce_api_version
+  salesforce_access_token_ttl = var.salesforce_access_token_ttl
+  mcp_jwt_secret              = var.mcp_jwt_secret
+  mcp_base_url                = var.mcp_base_url
 
   tags = var.tags
 }

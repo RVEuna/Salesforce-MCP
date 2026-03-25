@@ -68,6 +68,8 @@ def _load_aws_secrets() -> None:
         salesforce_settings.client_id = secret["SALESFORCE_CLIENT_ID"]
     if "SALESFORCE_CLIENT_SECRET" in secret:
         salesforce_settings.client_secret = secret["SALESFORCE_CLIENT_SECRET"]
+    if "SALESFORCE_API_VERSION" in secret:
+        salesforce_settings.api_version = secret["SALESFORCE_API_VERSION"]
     if "SALESFORCE_ACCESS_TOKEN_TTL" in secret:
         salesforce_settings.access_token_ttl = int(secret["SALESFORCE_ACCESS_TOKEN_TTL"])
 

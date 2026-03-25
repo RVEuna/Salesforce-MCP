@@ -27,13 +27,11 @@ server:
   transport: streamable-http
   stateless: true
 
-# Environment variables (non-sensitive)
+# Environment variables (non-sensitive — credentials come from Secrets Manager)
 environment:
   MCP_SERVER_NAME: salesforce-mcp-server
   MCP_LOG_LEVEL: INFO
   MCP_LOG_FORMAT: json
-  SALESFORCE_INSTANCE_URL: https://myorg.my.salesforce.com
-  SALESFORCE_API_VERSION: v66.0
 
 # Secrets (reference AWS Secrets Manager)
 secrets:

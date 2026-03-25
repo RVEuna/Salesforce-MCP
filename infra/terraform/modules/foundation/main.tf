@@ -62,10 +62,16 @@ resource "aws_secretsmanager_secret" "api_keys" {
 }
 
 resource "aws_secretsmanager_secret_version" "api_keys" {
-  count     = var.api_key != "" ? 1 : 0
   secret_id = aws_secretsmanager_secret.api_keys.id
   secret_string = jsonencode({
-    api_key = var.api_key
+    SALESFORCE_INSTANCE_URL     = var.salesforce_instance_url
+    SALESFORCE_LOGIN_URL        = var.salesforce_login_url
+    SALESFORCE_CLIENT_ID        = var.salesforce_client_id
+    SALESFORCE_CLIENT_SECRET    = var.salesforce_client_secret
+    SALESFORCE_API_VERSION      = var.salesforce_api_version
+    SALESFORCE_ACCESS_TOKEN_TTL = tostring(var.salesforce_access_token_ttl)
+    MCP_JWT_SECRET              = var.mcp_jwt_secret
+    MCP_BASE_URL                = var.mcp_base_url
   })
 }
 

@@ -25,6 +25,12 @@ output "agentcore_execution_role_arn" {
   value       = module.foundation.agentcore_execution_role_arn
 }
 
+# Secrets Manager
+output "secrets_arn" {
+  description = "Secrets Manager secret ARN"
+  value       = module.foundation.secrets_arn
+}
+
 # Quick Start Instructions
 output "next_steps" {
   description = "Next steps after deployment"
@@ -37,12 +43,11 @@ output "next_steps" {
        docker build -t ${module.foundation.ecr_repository_url}:${var.container_image_tag} .
        docker push ${module.foundation.ecr_repository_url}:${var.container_image_tag}
 
-    2. Update your .env with Salesforce Connected App credentials:
-       SALESFORCE_INSTANCE_URL=https://myorg.my.salesforce.com
-       SALESFORCE_CLIENT_ID=<your consumer key>
-       SALESFORCE_CLIENT_SECRET=<your consumer secret>
+    2. Secrets Manager has been populated by Terraform with your
+       Salesforce and MCP credentials. Verify with:
+       aws secretsmanager get-secret-value --secret-id ${module.foundation.secrets_arn} --query SecretString --output text | python -m json.tool
 
-    3. Test locally, then deploy to AgentCore.
+    3. AgentCore will load secrets from Secrets Manager at container startup.
 
   EOT
 }
