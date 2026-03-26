@@ -1,4 +1,4 @@
-.PHONY: help install dev-server dev test test-unit test-int lint format build deploy clean
+.PHONY: help install dev-server dev local-dev local-token test test-unit test-int lint format build deploy clean
 
 FUNCTION_NAME ?= salesforce-mcp-oauth-proxy
 REGION ?= us-east-2
@@ -11,6 +11,8 @@ help:
 	@echo "    install      - Install dependencies"
 	@echo "    dev-server   - Run MCP server locally"
 	@echo "    dev          - Install deps and run server"
+	@echo "    local-dev    - Get SF token, start server, smoke test (interactive)"
+	@echo "    local-token  - Just get a Salesforce access token and print it"
 	@echo ""
 	@echo "  Testing:"
 	@echo "    test         - Run all tests"
@@ -37,6 +39,12 @@ dev-server:
 
 dev: install
 	$(MAKE) dev-server
+
+local-dev:
+	uv run python scripts/local-dev.py
+
+local-token:
+	uv run python scripts/local-dev.py --token-only
 
 # Testing
 test:

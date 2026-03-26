@@ -12,6 +12,7 @@ Every user authenticates as themselves — no shared service accounts or central
 - [Local Development](#local-development)
   - [Installation](#installation)
   - [Configuration](#configuration)
+  - [Getting a Salesforce Access Token](#getting-a-salesforce-access-token)
   - [Running the Server](#running-the-server)
   - [Connecting an MCP Client](#connecting-an-mcp-client)
 - [AWS Deployment](#aws-deployment)
@@ -165,7 +166,36 @@ python -c "import secrets; print(secrets.token_hex(32))"
 
 Copy the output into `MCP_JWT_SECRET`. This secret is used to encrypt/decrypt OAuth authorization codes and compound Bearer tokens using Fernet (AES-128-CBC + HMAC-SHA256).
 
-**Shortcut for local dev without OAuth:** Set `SALESFORCE_ACCESS_TOKEN` to a raw session token from your browser. The server will use it as a fallback when no Bearer header is present, bypassing the full OAuth flow.
+### Getting a Salesforce Access Token
+
+For local development you can skip the full OAuth flow by providing a raw Salesforce access token. A helper script automates this — it opens the Salesforce login page in your browser and captures the token:
+
+```bash
+# Using Make
+make local-token
+
+# Or directly
+python scripts/local-dev.py
+```
+
+The script will:
+
+1. Read your Connected App credentials from `.env`
+2. Start a temporary local server on `http://localhost:8000`
+3. Open the Salesforce login page in your browser
+4. Wait for you to log in
+5. Exchange the callback code for an access token
+6. Print the token for you to copy into `.env`
+
+After running, paste the token into your `.env`:
+
+```dotenv
+SALESFORCE_ACCESS_TOKEN=00DAu000...
+```
+
+> **Note:** Make sure the MCP dev server isn't already running on port 8000 when using this script, since it starts its own temporary server on the same port to match the Connected App callback URL (`http://localhost:8000/oauth/callback`).
+
+With `SALESFORCE_ACCESS_TOKEN` set, the server uses it as a fallback when no Bearer header is present in the request, bypassing the full OAuth flow for local testing.
 
 ### Running the Server
 
@@ -726,6 +756,9 @@ salesforce-mcp-server/
 │               ├── variables.tf
 │               └── outputs.tf
 │
+├── scripts/
+│   └── local-dev.py               # Local dev helper — browser-based SF token retrieval
+│
 ├── .env.example                   # Environment template for local development
 ├── .gitignore                     # Git ignore rules
 ├── build-lambda.sh                # Build script for Lambda deployment zip (ARM64, Python 3.13)
@@ -746,6 +779,8 @@ salesforce-mcp-server/
 | `make install` | Install dependencies with `uv sync` |
 | `make dev-server` | Run the MCP server locally |
 | `make dev` | Install + run (convenience target) |
+| `make local-dev` | Get a Salesforce token, start server, and smoke test (interactive) |
+| `make local-token` | Get a Salesforce access token via browser login and print it |
 | `make test` | Run all tests with coverage |
 | `make test-unit` | Run unit tests only |
 | `make test-int` | Run integration tests (requires `SALESFORCE_ACCESS_TOKEN`) |
