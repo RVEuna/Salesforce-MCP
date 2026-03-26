@@ -8,21 +8,32 @@ variable "environment" {
   type        = string
 }
 
+# Secrets Manager
+variable "secrets_arn" {
+  description = "ARN of the Secrets Manager secret containing all config"
+  type        = string
+}
+
+variable "secret_name" {
+  description = "Name of the Secrets Manager secret"
+  type        = string
+}
+
 # Lambda deployment artifact (provide EITHER zip path OR S3 location)
 variable "lambda_zip_path" {
-  description = "Local path to the Lambda zip file. Mutually exclusive with lambda_s3_*."
+  description = "Local path to the Lambda zip file"
   type        = string
   default     = ""
 }
 
 variable "lambda_s3_bucket" {
-  description = "S3 bucket containing the Lambda zip. Mutually exclusive with lambda_zip_path."
+  description = "S3 bucket containing the Lambda zip"
   type        = string
   default     = ""
 }
 
 variable "lambda_s3_key" {
-  description = "S3 key for the Lambda zip. Mutually exclusive with lambda_zip_path."
+  description = "S3 key for the Lambda zip"
   type        = string
   default     = ""
 }
@@ -33,53 +44,22 @@ variable "lambda_architecture" {
   default     = "arm64"
 }
 
-# Salesforce Connected App credentials
-variable "salesforce_client_id" {
-  description = "Connected App consumer key"
-  type        = string
-  sensitive   = true
+variable "lambda_timeout" {
+  description = "Lambda timeout in seconds"
+  type        = number
+  default     = 300
 }
 
-variable "salesforce_client_secret" {
-  description = "Connected App consumer secret"
-  type        = string
-  sensitive   = true
-}
-
-variable "salesforce_login_url" {
-  description = "Salesforce OAuth login endpoint (https://login.salesforce.com or https://test.salesforce.com)"
-  type        = string
-}
-
-# AgentCore
-variable "agentcore_url" {
-  description = "Full AgentCore runtime invocation URL (e.g. https://<id>.runtime.agentcore.<region>.amazonaws.com/mcp)"
-  type        = string
-}
-
-# Proxy config
-variable "proxy_secret" {
-  description = "Secret for encrypting short-lived auth codes"
-  type        = string
-  sensitive   = true
-}
-
-variable "proxy_base_url" {
-  description = "Public base URL of the proxy (set after initial deploy when function URL is known)"
-  type        = string
-  default     = ""
+variable "lambda_memory" {
+  description = "Lambda memory in MB"
+  type        = number
+  default     = 512
 }
 
 variable "log_level" {
   description = "Logging level"
   type        = string
   default     = "INFO"
-}
-
-variable "sf_access_token_ttl" {
-  description = "Access token TTL returned to clients (seconds)"
-  type        = number
-  default     = 7200
 }
 
 variable "log_retention_days" {

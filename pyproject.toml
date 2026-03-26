@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "salesforce-mcp-server"
 version = "0.1.0"
-description = "MCP server with Salesforce REST API backend, deployable to AgentCore"
+description = "MCP server with Salesforce REST API backend, deployable to AWS Lambda"
 readme = "README.md"
 requires-python = ">=3.11"
 
@@ -13,6 +13,7 @@ dependencies = [
     # MCP server
     "mcp>=1.23.0",
     "uvicorn>=0.30.0",
+    "starlette>=0.37.0",
 
     # Configuration
     "pydantic>=2.0.0",
@@ -27,6 +28,12 @@ dependencies = [
 
     # Token encryption (Fernet = AES-128-CBC + HMAC-SHA256)
     "cryptography>=44.0.0",
+
+    # Lambda ASGI adapter
+    "mangum>=0.19.0",
+
+    # Form parsing for OAuth token endpoint
+    "python-multipart>=0.0.9",
 ]
 
 [dependency-groups]

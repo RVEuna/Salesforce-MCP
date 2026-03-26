@@ -7,22 +7,17 @@
 project_name = "salesforce-mcp-server"
 
 # Optional - uncomment to customize
-# aws_region          = "us-east-2"
-# environment         = "dev"
-# container_image_tag = "latest"
-# alarm_email         = "alerts@example.com"
+# aws_region   = "us-east-2"
+# environment  = "dev"
+# alarm_email  = "alerts@example.com"
 
-# Salesforce Connected App credentials (stored in Secrets Manager)
-salesforce_instance_url  = "https://myorg.my.salesforce.com"
-salesforce_login_url     = "https://login.salesforce.com"
-salesforce_client_id     = "<Connected App consumer key>"
-salesforce_client_secret = "<Connected App consumer secret>"
-# salesforce_api_version      = "v66.0"
-# salesforce_access_token_ttl = 7200
+# Lambda deployment (provide either a local zip path or S3 location)
+# lambda_zip_path  = "../../lambda.zip"
+# lambda_s3_bucket = "my-deployment-bucket"
+# lambda_s3_key    = "salesforce-mcp-server/lambda.zip"
 
-# MCP credentials (stored in Secrets Manager)
-mcp_jwt_secret = "<generate with: python -c \"import secrets; print(secrets.token_hex(32))\">"
-mcp_base_url   = "https://<your-agentcore-endpoint>"
+# All Salesforce/MCP credentials are managed in Secrets Manager via the Console.
+# See README.md for the required secret keys.
 
 # Additional tags
 # tags = {

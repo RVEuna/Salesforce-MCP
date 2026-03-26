@@ -193,6 +193,7 @@ oauth_routes = [
     Route("/.well-known/oauth-protected-resource/{path:path}", oauth_protected_resource),
     Route("/.well-known/oauth-protected-resource", oauth_protected_resource),
     Route("/.well-known/oauth-authorization-server", oauth_metadata),
+    Route("/.well-known/openid-configuration", oauth_metadata),
     Route("/oauth/register", oauth_register, methods=["POST"]),
     Route("/oauth/authorize", oauth_authorize),
     Route("/oauth/callback", oauth_callback),

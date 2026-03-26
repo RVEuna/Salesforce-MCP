@@ -1,5 +1,8 @@
-.PHONY: help install dev-server dev test test-unit test-int lint format build deploy clean \
-       proxy-build proxy-local proxy-deploy
+.PHONY: help install dev-server dev test test-unit test-int lint format build deploy clean
+
+FUNCTION_NAME ?= salesforce-mcp-oauth-proxy
+REGION ?= us-east-2
+PROFILE ?= shared-dev
 
 help:
 	@echo "Available targets:"
@@ -18,17 +21,12 @@ help:
 	@echo "    lint         - Run linter"
 	@echo "    format       - Format code"
 	@echo ""
-	@echo "  OAuth Proxy:"
-	@echo "    proxy-build  - Build Lambda zip for OAuth proxy"
-	@echo "    proxy-local  - Run OAuth proxy locally (port 9090)"
-	@echo "    proxy-deploy - Deploy proxy Lambda (requires FUNCTION_NAME, REGION)"
-	@echo ""
 	@echo "  Deployment:"
-	@echo "    build        - Build Docker image"
-	@echo "    deploy       - Deploy to AgentCore"
+	@echo "    build        - Build Lambda deployment zip"
+	@echo "    deploy       - Deploy Lambda to AWS (FUNCTION_NAME, REGION, PROFILE)"
 	@echo ""
 	@echo "  Cleanup:"
-	@echo "    clean        - Clean up caches"
+	@echo "    clean        - Clean up caches and build artifacts"
 
 # Development
 install:
@@ -58,32 +56,19 @@ format:
 	uv run ruff check --fix .
 	uv run ruff format .
 
-# OAuth Proxy
-proxy-build:
-	cd oauth_proxy && bash build-lambda.sh
-
-proxy-local:
-	uv run python -m oauth_proxy.salesforce_oauth_proxy
-
-proxy-deploy:
-	@test -n "$(FUNCTION_NAME)" || (echo "Usage: make proxy-deploy FUNCTION_NAME=<name> REGION=<region>" && exit 1)
-	aws lambda update-function-code \
-		--function-name $(FUNCTION_NAME) \
-		--zip-file fileb://oauth_proxy/lambda.zip \
-		--region $(or $(REGION),us-east-2)
-
 # Deployment
 build:
-	docker build -t salesforce-mcp-server:latest .
+	bash build-lambda.sh
 
-deploy:
-	@echo "Deploying to AgentCore..."
-	@echo "1. Ensure AWS credentials are configured"
-	@echo "2. Run: cd infra/terraform && terraform apply"
-	cd infra/terraform && terraform init && terraform apply
+deploy: build
+	aws lambda update-function-code \
+		--function-name $(FUNCTION_NAME) \
+		--zip-file fileb://lambda.zip \
+		--region $(REGION) \
+		--profile $(PROFILE)
 
 # Cleanup
 clean:
 	rm -rf __pycache__ .pytest_cache .ruff_cache
-	rm -rf oauth_proxy/.build oauth_proxy/lambda.zip
+	rm -rf .lambda-build lambda.zip
 	find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true

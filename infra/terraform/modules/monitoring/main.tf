@@ -55,9 +55,9 @@ resource "aws_cloudwatch_dashboard" "main" {
         width  = 24
         height = 6
         properties = {
-          title  = "AgentCore Logs"
+          title  = "Lambda Logs"
           region = data.aws_region.current.name
-          query  = "SOURCE '/aws/bedrock-agentcore/${var.agentcore_runtime_name}' | fields @timestamp, @message | sort @timestamp desc | limit 100"
+          query  = "SOURCE '/aws/lambda/${var.lambda_function_name}' | fields @timestamp, @message | sort @timestamp desc | limit 100"
         }
       }
     ]

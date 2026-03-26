@@ -8,8 +8,8 @@ variable "environment" {
   type        = string
 }
 
-variable "agentcore_runtime_name" {
-  description = "AgentCore runtime name"
+variable "lambda_function_name" {
+  description = "Lambda function name for log queries"
   type        = string
 }
 

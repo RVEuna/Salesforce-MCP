@@ -1,33 +1,31 @@
-"""FastMCP server for AgentCore deployment.
+"""Salesforce MCP server — runs on AWS Lambda or locally via uvicorn.
 
-This module implements the MCP server using FastMCP with stateless HTTP transport,
-designed for deployment to AWS Bedrock AgentCore.
-
-Key characteristics:
-- Stateless mode for horizontal scaling
-- Per-user OAuth 2.0 — each request carries a Salesforce Bearer token
-- All Salesforce RBAC enforced by Salesforce itself
-- Structured JSON logging for CloudWatch
+Stateless HTTP transport with per-user OAuth 2.0 (Salesforce Bearer tokens).
+All config is loaded from AWS Secrets Manager in production or .env locally.
 
 Usage:
     # Local development
     uv run python -m mcp_server.server
 
-    # Or via the entry point
-    uv run mcp-server
+    # AWS Lambda handler
+    mcp_server.server.handler
 """
 
 import json
 import logging
+import os
 import sys
 import time
 from contextlib import asynccontextmanager
 
+import anyio
 import uvicorn
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 from starlette.applications import Starlette
-from starlette.routing import Mount
+from starlette.requests import Request
+from starlette.responses import JSONResponse
+from starlette.routing import Mount, Route
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from mcp_server.config import mcp_settings, salesforce_settings
@@ -105,10 +103,8 @@ logger = logging.getLogger(__name__)
 # FASTMCP SERVER INITIALIZATION
 # =============================================================================
 
-# IMPORTANT: DNS rebinding protection must be disabled for AgentCore deployments.
-# AgentCore's internal routing uses internal hostnames that would be rejected
-# by the default Host header validation. Since we're running behind AWS IAM
-# authentication, this is safe.
+# DNS rebinding protection disabled: Lambda Function URLs and internal
+# routing use hostnames that would be rejected by Host header validation.
 mcp = FastMCP(
     name=mcp_settings.server_name,
     host=mcp_settings.host,
@@ -192,22 +188,51 @@ class RequireBearerToken:
 
 
 # =============================================================================
+# HEALTH ENDPOINT
+# =============================================================================
+
+
+async def health(request: Request) -> JSONResponse:
+    return JSONResponse({"status": "ok", "server": mcp_settings.server_name})
+
+
+# =============================================================================
 # COMPOSITE STARLETTE APP (OAuth routes + FastMCP)
 # =============================================================================
 
 mcp_app = mcp.streamable_http_app()
 
+# On Lambda, load secrets at module level (cold start) so they're available
+# before any request. The streamable_http_app manages its own session
+# manager lifecycle, so we don't duplicate that in our lifespan.
+_is_lambda = bool(os.environ.get("AWS_LAMBDA_FUNCTION_NAME"))
+if _is_lambda and mcp_settings.secret_provider == "aws":
+    _load_aws_secrets()
+
 
 @asynccontextmanager
 async def lifespan(app):
-    if mcp_settings.secret_provider == "aws":
+    """Lifespan — loads secrets (local) and starts the MCP session manager.
+
+    On Lambda, Mangum restarts the lifespan per invocation. The MCP SDK's
+    session manager is one-shot per instance, so we reset its internal state
+    for warm containers. Safe because Lambda is stateless (one req/invoke).
+    """
+    if not _is_lambda and mcp_settings.secret_provider == "aws":
         _load_aws_secrets()
+
+    if _is_lambda:
+        mcp.session_manager._has_started = False
+        mcp.session_manager._run_lock = anyio.Lock()
+        mcp.session_manager._session_creation_lock = anyio.Lock()
+
     async with mcp.session_manager.run():
         yield
 
 
 app = Starlette(
     routes=[
+        Route("/health", health),
         *oauth_routes,
         Mount("/", app=RequireBearerToken(mcp_app)),
     ],
@@ -252,3 +277,13 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+# =============================================================================
+# AWS LAMBDA HANDLER (Mangum wraps the ASGI app for Function URL)
+# =============================================================================
+
+try:
+    from mangum import Mangum
+    handler = Mangum(app, lifespan="on")
+except ImportError:
+    handler = None

@@ -2,14 +2,13 @@
 # MCP Server Infrastructure - Root Module
 # =============================================================================
 #
-# This deploys a Salesforce MCP server to AWS Bedrock AgentCore.
+# Deploys a Salesforce MCP server to AWS Lambda with Secrets Manager.
 #
 # Resources created:
-# - ECR repository for container images
-# - AgentCore runtime for MCP server hosting
-# - IAM roles and policies
+# - Secrets Manager secret (values managed via Console)
+# - Lambda function + Function URL
+# - IAM role with Secrets Manager access
 # - CloudWatch dashboards and alarms
-# - Secrets Manager for API keys
 #
 # Usage:
 #   1. Copy terraform.tfvars.example to terraform.tfvars
@@ -49,75 +48,36 @@ provider "aws" {
 }
 
 # =============================================================================
-# Foundation - IAM, ECR, Secrets
+# Foundation - Secrets Manager
 # =============================================================================
 module "foundation" {
   source = "./modules/foundation"
 
-  project_name       = var.project_name
-  environment        = var.environment
-  execution_role_arn = var.execution_role_arn
-
-  salesforce_instance_url     = var.salesforce_instance_url
-  salesforce_login_url        = var.salesforce_login_url
-  salesforce_client_id        = var.salesforce_client_id
-  salesforce_client_secret    = var.salesforce_client_secret
-  salesforce_api_version      = var.salesforce_api_version
-  salesforce_access_token_ttl = var.salesforce_access_token_ttl
-  mcp_jwt_secret              = var.mcp_jwt_secret
-  mcp_base_url                = var.mcp_base_url
+  project_name = var.project_name
+  environment  = var.environment
 
   tags = var.tags
 }
 
 # =============================================================================
-# AgentCore Runtime
+# MCP Server - Lambda + Function URL
 # =============================================================================
-module "agentcore" {
-  source = "./modules/agentcore"
-
-  project_name       = var.project_name
-  environment        = var.environment
-  agent_runtime_name = var.project_name
-
-  ecr_repository_url      = module.foundation.ecr_repository_url
-  container_image_tag     = var.container_image_tag
-  execution_role_arn      = module.foundation.agentcore_execution_role_arn
-  codebuild_role_arn      = module.foundation.codebuild_role_arn
-  codebuild_source_bucket = module.foundation.codebuild_source_bucket
-  create_codebuild        = var.execution_role_arn == ""
-
-  jwt_authorizer_discovery_url = var.jwt_authorizer_discovery_url
-  jwt_authorizer_audiences     = var.jwt_authorizer_audiences
-
-  tags = var.tags
-
-  depends_on = [module.foundation]
-}
-
-# =============================================================================
-# OAuth Proxy - Lambda + Function URL (public MCP endpoint)
-# =============================================================================
-module "oauth_proxy" {
+module "mcp_server" {
   source = "./modules/oauth_proxy"
-  count  = var.deploy_oauth_proxy ? 1 : 0
 
   project_name = var.project_name
   environment  = var.environment
 
-  salesforce_client_id     = var.salesforce_client_id
-  salesforce_client_secret = var.salesforce_client_secret
-  salesforce_login_url     = var.salesforce_login_url
-  agentcore_url            = var.oauth_proxy_agentcore_url
-  proxy_secret             = var.oauth_proxy_secret
+  secrets_arn = module.foundation.secrets_arn
+  secret_name = module.foundation.secrets_name
 
-  lambda_zip_path = var.oauth_proxy_lambda_zip_path
-  lambda_s3_bucket = var.oauth_proxy_lambda_s3_bucket
-  lambda_s3_key    = var.oauth_proxy_lambda_s3_key
+  lambda_zip_path  = var.lambda_zip_path
+  lambda_s3_bucket = var.lambda_s3_bucket
+  lambda_s3_key    = var.lambda_s3_key
 
   tags = var.tags
 
-  depends_on = [module.agentcore]
+  depends_on = [module.foundation]
 }
 
 # =============================================================================
@@ -129,11 +89,11 @@ module "monitoring" {
   project_name = var.project_name
   environment  = var.environment
 
-  agentcore_runtime_name = "${var.project_name}-${var.environment}"
+  lambda_function_name = module.mcp_server.function_name
 
   alarm_email = var.alarm_email
 
   tags = var.tags
 
-  depends_on = [module.agentcore]
+  depends_on = [module.mcp_server]
 }
