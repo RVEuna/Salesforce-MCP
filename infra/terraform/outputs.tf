@@ -31,6 +31,17 @@ output "secrets_arn" {
   value       = module.foundation.secrets_arn
 }
 
+# OAuth Proxy
+output "oauth_proxy_function_url" {
+  description = "OAuth proxy Lambda function URL"
+  value       = var.deploy_oauth_proxy ? module.oauth_proxy[0].function_url : ""
+}
+
+output "oauth_proxy_mcp_url" {
+  description = "MCP server URL via OAuth proxy (for client configuration)"
+  value       = var.deploy_oauth_proxy ? "${module.oauth_proxy[0].function_url}mcp" : ""
+}
+
 # Quick Start Instructions
 output "next_steps" {
   description = "Next steps after deployment"

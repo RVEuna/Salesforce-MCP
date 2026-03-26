@@ -40,10 +40,13 @@ locals {
   runtime_name_safe = replace("${var.agent_runtime_name}_${var.environment}", "-", "_")
 
   runtime_config_hash = sha256(jsonencode({
-    name          = local.runtime_name_safe
-    container_uri = "${var.ecr_repository_url}:${var.container_image_tag}"
-    role_arn      = var.execution_role_arn
+    name           = local.runtime_name_safe
+    container_uri  = "${var.ecr_repository_url}:${var.container_image_tag}"
+    role_arn       = var.execution_role_arn
+    authorizer     = var.jwt_authorizer_discovery_url
   }))
+
+  authorizer_flag = var.jwt_authorizer_discovery_url != "" ? "--authorizer-configuration '{\"customJWTAuthorizer\":{\"discoveryUrl\":\"${var.jwt_authorizer_discovery_url}\",\"allowedAudience\":[${join(",", [for aud in var.jwt_authorizer_audiences : "\"${aud}\""])}]}}'" : ""
 
   codebuild_env_type = var.container_architecture == "ARM" ? "ARM_CONTAINER" : "LINUX_CONTAINER"
   codebuild_image    = var.container_architecture == "ARM" ? "aws/codebuild/amazonlinux2-aarch64-standard:3.0" : "aws/codebuild/amazonlinux2-x86_64-standard:5.0"
@@ -85,13 +88,15 @@ resource "null_resource" "agentcore_runtime" {
           --agent-runtime-name "${local.runtime_name_safe}" \
           --agent-runtime-artifact '{"containerConfiguration":{"containerUri":"${var.ecr_repository_url}:${var.container_image_tag}"}}' \
           --network-configuration '{"networkMode":"${var.network_mode}"}' \
-          --role-arn "${var.execution_role_arn}"
+          --role-arn "${var.execution_role_arn}" \
+          ${local.authorizer_flag}
       else
         echo "Updating existing AgentCore Runtime: $EXISTING"
         aws bedrock-agentcore-control update-agent-runtime \
           --region ${data.aws_region.current.name} \
           --agent-runtime-id "$EXISTING" \
-          --agent-runtime-artifact '{"containerConfiguration":{"containerUri":"${var.ecr_repository_url}:${var.container_image_tag}"}}'
+          --agent-runtime-artifact '{"containerConfiguration":{"containerUri":"${var.ecr_repository_url}:${var.container_image_tag}"}}' \
+          ${local.authorizer_flag}
       fi
     EOT
   }

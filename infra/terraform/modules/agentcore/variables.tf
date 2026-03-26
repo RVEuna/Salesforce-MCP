@@ -65,6 +65,19 @@ variable "log_retention_days" {
   default     = 30
 }
 
+# JWT Authorizer (enables customJWTAuthorizer on AgentCore instead of IAM/SigV4)
+variable "jwt_authorizer_discovery_url" {
+  description = "OIDC discovery URL for customJWTAuthorizer. Set to Salesforce instance URL + /.well-known/openid-configuration. Leave empty to use default IAM auth."
+  type        = string
+  default     = ""
+}
+
+variable "jwt_authorizer_audiences" {
+  description = "Allowed JWT audience values (typically the Connected App client ID)"
+  type        = list(string)
+  default     = []
+}
+
 variable "tags" {
   description = "Tags to apply to all resources"
   type        = map(string)

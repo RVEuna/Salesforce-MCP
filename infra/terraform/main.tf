@@ -87,9 +87,37 @@ module "agentcore" {
   codebuild_source_bucket = module.foundation.codebuild_source_bucket
   create_codebuild        = var.execution_role_arn == ""
 
+  jwt_authorizer_discovery_url = var.jwt_authorizer_discovery_url
+  jwt_authorizer_audiences     = var.jwt_authorizer_audiences
+
   tags = var.tags
 
   depends_on = [module.foundation]
+}
+
+# =============================================================================
+# OAuth Proxy - Lambda + Function URL (public MCP endpoint)
+# =============================================================================
+module "oauth_proxy" {
+  source = "./modules/oauth_proxy"
+  count  = var.deploy_oauth_proxy ? 1 : 0
+
+  project_name = var.project_name
+  environment  = var.environment
+
+  salesforce_client_id     = var.salesforce_client_id
+  salesforce_client_secret = var.salesforce_client_secret
+  salesforce_login_url     = var.salesforce_login_url
+  agentcore_url            = var.oauth_proxy_agentcore_url
+  proxy_secret             = var.oauth_proxy_secret
+
+  lambda_zip_path = var.oauth_proxy_lambda_zip_path
+  lambda_s3_bucket = var.oauth_proxy_lambda_s3_bucket
+  lambda_s3_key    = var.oauth_proxy_lambda_s3_key
+
+  tags = var.tags
+
+  depends_on = [module.agentcore]
 }
 
 # =============================================================================

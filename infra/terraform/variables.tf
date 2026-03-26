@@ -81,6 +81,57 @@ variable "mcp_base_url" {
   type        = string
 }
 
+# AgentCore JWT Authorizer (for OAuth proxy + Salesforce JWT tokens)
+variable "jwt_authorizer_discovery_url" {
+  description = "OIDC discovery URL for AgentCore customJWTAuthorizer. Typically: https://<sf-instance>.my.salesforce.com/.well-known/openid-configuration"
+  type        = string
+  default     = ""
+}
+
+variable "jwt_authorizer_audiences" {
+  description = "Allowed JWT audience values for AgentCore (typically the Connected App client ID)"
+  type        = list(string)
+  default     = []
+}
+
+# OAuth Proxy (Lambda)
+variable "deploy_oauth_proxy" {
+  description = "Whether to deploy the OAuth proxy Lambda"
+  type        = bool
+  default     = false
+}
+
+variable "oauth_proxy_agentcore_url" {
+  description = "AgentCore invocation URL for the OAuth proxy to forward /mcp requests"
+  type        = string
+  default     = ""
+}
+
+variable "oauth_proxy_secret" {
+  description = "Secret for the OAuth proxy to encrypt short-lived auth codes"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "oauth_proxy_lambda_zip_path" {
+  description = "Local path to the OAuth proxy Lambda zip"
+  type        = string
+  default     = ""
+}
+
+variable "oauth_proxy_lambda_s3_bucket" {
+  description = "S3 bucket containing the OAuth proxy Lambda zip"
+  type        = string
+  default     = ""
+}
+
+variable "oauth_proxy_lambda_s3_key" {
+  description = "S3 key for the OAuth proxy Lambda zip"
+  type        = string
+  default     = ""
+}
+
 # Monitoring Configuration
 variable "alarm_email" {
   description = "Email address for CloudWatch alarm notifications"

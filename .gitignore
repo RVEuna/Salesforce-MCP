@@ -70,6 +70,10 @@ agents/examples/**/node_modules/
 !*.tfvars.example
 .terraform.lock.hcl
 
+# Lambda build artifacts
+oauth_proxy/.build/
+oauth_proxy/lambda.zip
+
 # Docker
 docker-compose.override.yml
 
