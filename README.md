@@ -1,6 +1,6 @@
 # Salesforce MCP Server
 
-A production-ready [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server that provides **read-only** access to the Salesforce REST API. Built with per-user OAuth 2.0 authentication and designed for deployment to **AWS Bedrock AgentCore**.
+A production-ready [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server that provides **read-only** access to the Salesforce REST API. Built with per-user OAuth 2.0 authentication and designed for deployment to **AWS Lambda**.
 
 Every user authenticates as themselves — no shared service accounts or central credentials. All Salesforce API calls execute under the authenticated user's own access token, so Salesforce's native RBAC (profiles, permission sets, field-level security, sharing rules) applies automatically to every tool call.
 
@@ -16,10 +16,13 @@ Every user authenticates as themselves — no shared service accounts or central
   - [Connecting an MCP Client](#connecting-an-mcp-client)
 - [AWS Deployment](#aws-deployment)
   - [Infrastructure Overview](#infrastructure-overview)
-  - [Step 1: Configure Terraform Variables](#step-1-configure-terraform-variables)
-  - [Step 2: Deploy Infrastructure](#step-2-deploy-infrastructure)
-  - [Step 3: Build and Push the Container](#step-3-build-and-push-the-container)
-  - [Step 4: Verify the Deployment](#step-4-verify-the-deployment)
+  - [Step 1: Build the Lambda Zip](#step-1-build-the-lambda-zip)
+  - [Step 2: Configure Terraform Variables](#step-2-configure-terraform-variables)
+  - [Step 3: Deploy Infrastructure](#step-3-deploy-infrastructure)
+  - [Step 4: Populate Secrets Manager](#step-4-populate-secrets-manager)
+  - [Step 5: Update Salesforce Connected App](#step-5-update-salesforce-connected-app)
+  - [Step 6: Verify the Deployment](#step-6-verify-the-deployment)
+  - [Quick Deploy via CLI (Existing Lambda)](#quick-deploy-via-cli-existing-lambda)
 - [MCP Tools Reference](#mcp-tools-reference)
 - [Authentication Deep Dive](#authentication-deep-dive)
   - [OAuth 2.0 Flow](#oauth-20-flow)
@@ -27,14 +30,12 @@ Every user authenticates as themselves — no shared service accounts or central
   - [Compound Tokens](#compound-tokens)
   - [Sandbox vs. Production](#sandbox-vs-production)
 - [Configuration Reference](#configuration-reference)
-  - [Salesforce Settings](#salesforce-settings)
-  - [MCP Server Settings](#mcp-server-settings)
+  - [Secrets Manager Keys (Production)](#secrets-manager-keys-production)
+  - [Environment Variables (Local)](#environment-variables-local)
 - [Testing](#testing)
   - [Unit Tests](#unit-tests)
   - [Integration Tests](#integration-tests)
-  - [Deployed Server Tests](#deployed-server-tests)
 - [Project Structure](#project-structure)
-- [Docker](#docker)
 - [Development Guide](#development-guide)
   - [Makefile Commands](#makefile-commands)
   - [Code Quality](#code-quality)
@@ -47,11 +48,11 @@ Every user authenticates as themselves — no shared service accounts or central
 
 ```
 ┌─────────────────┐       ┌──────────────────────────────────┐       ┌──────────────────┐
-│   MCP Client    │       │     Salesforce MCP Server        │       │   Salesforce      │
+│   MCP Client    │       │  AWS Lambda (Function URL)       │       │   Salesforce      │
 │  (Claude, etc.) │       │                                  │       │   REST API        │
 │                 │       │  ┌────────────────────────────┐  │       │                   │
 │  1. Discover    │──────▶│  │ OAuth Routes (Starlette)   │  │       │  /services/data/  │
-│     auth via    │       │  │ /.well-known/*             │  │       │  v66.0/           │
+│     auth via    │       │  │ /.well-known/*             │  │       │  vXX.0/           │
 │     RFC 8414    │       │  │ /oauth/authorize           │  │       │                   │
 │                 │       │  │ /oauth/callback            │  │       │  - /query         │
 │  2. User logs   │──────▶│  │ /oauth/token               │  │       │  - /search        │
@@ -63,17 +64,19 @@ Every user authenticates as themselves — no shared service accounts or central
 │                 │◀──────│  │ 7 Salesforce Tools         │  │◀──────│                   │
 └─────────────────┘       │  └────────────────────────────┘  │       └──────────────────┘
                           │                                  │
-                          │  Stateless — horizontally        │
-                          │  scalable on AgentCore           │
+                          │  Config: AWS Secrets Manager     │
+                          │  Stateless — scales to zero      │
                           └──────────────────────────────────┘
 ```
 
-The server is a composite **Starlette** application with two layers:
+The server is a composite **Starlette** ASGI application with two layers, wrapped by **Mangum** for Lambda compatibility:
 
 1. **OAuth routes** — standard HTTP endpoints that broker the Salesforce Authorization Code flow on behalf of MCP clients.
 2. **FastMCP application** — wrapped in `RequireBearerToken` ASGI middleware that enforces Bearer token presence and expiry before any tool call reaches FastMCP.
 
-At runtime the server is fully **stateless**: no in-memory sessions, no caches, no sticky routing. Each request carries an encrypted compound token containing the user's Salesforce access token. This makes it safe to run behind a load balancer or on AgentCore where any container instance can handle any request.
+At runtime the server is fully **stateless**: no in-memory sessions, no caches, no sticky routing. Each request carries an encrypted compound token containing the user's Salesforce access token. This enables horizontal scaling with zero coordination — Lambda can invoke as many concurrent instances as needed.
+
+All configuration (including non-sensitive values like API versions) is centralized in **AWS Secrets Manager** and pulled by Lambda at cold start.
 
 ---
 
@@ -81,12 +84,11 @@ At runtime the server is fully **stateless**: no in-memory sessions, no caches, 
 
 | Requirement | Version | Notes |
 |---|---|---|
-| Python | 3.11+ (3.13 recommended) | |
+| Python | 3.11+ (3.13 recommended) | Lambda runtime uses 3.13 |
 | [uv](https://github.com/astral-sh/uv) | latest | Fast Python package manager |
 | Salesforce Connected App | — | OAuth 2.0 enabled (see [setup](#salesforce-connected-app-setup)) |
-| AWS CLI | v2 | For deployment only |
+| AWS CLI | v2 | For CLI deployments |
 | Terraform | >= 1.5.0 | For infrastructure provisioning |
-| Docker | latest | For container builds |
 
 ---
 
@@ -100,7 +102,7 @@ Before running the server (locally or deployed), you need a Salesforce Connected
    - Check **Enable OAuth Settings**.
    - **Callback URL**:
      - Local development: `http://localhost:8000/oauth/callback`
-     - AWS deployment: `https://<your-agentcore-endpoint>/oauth/callback`
+     - AWS deployment: `https://<lambda-function-url>/oauth/callback`
    - **Selected OAuth Scopes**:
      - `Access the identity URL service (id, profile, email, address, phone)` — `api`
      - `Perform requests at any time (refresh_token, offline_access)` — `refresh_token`
@@ -117,14 +119,11 @@ Before running the server (locally or deployed), you need a Salesforce Connected
 ### Installation
 
 ```bash
-# Clone the repository
 git clone <repo-url>
 cd salesforce-mcp-server
 
-# Copy the local config template
-cp .env.local.example .env
+cp .env.example .env
 
-# Install all dependencies (including dev tools)
 uv sync
 ```
 
@@ -166,6 +165,8 @@ python -c "import secrets; print(secrets.token_hex(32))"
 
 Copy the output into `MCP_JWT_SECRET`. This secret is used to encrypt/decrypt OAuth authorization codes and compound Bearer tokens using Fernet (AES-128-CBC + HMAC-SHA256).
 
+**Shortcut for local dev without OAuth:** Set `SALESFORCE_ACCESS_TOKEN` to a raw session token from your browser. The server will use it as a fallback when no Bearer header is present, bypassing the full OAuth flow.
+
 ### Running the Server
 
 ```bash
@@ -177,11 +178,18 @@ uv run python -m mcp_server.server
 ```
 
 The server starts on `http://localhost:8000` with:
-- **MCP endpoint**: `http://localhost:8000/mcp` (Streamable HTTP transport)
-- **OAuth discovery**: `http://localhost:8000/.well-known/oauth-authorization-server`
-- **OAuth authorize**: `http://localhost:8000/oauth/authorize`
-- **OAuth callback**: `http://localhost:8000/oauth/callback`
-- **OAuth token**: `http://localhost:8000/oauth/token`
+
+| Endpoint | Purpose |
+|---|---|
+| `http://localhost:8000/mcp` | MCP endpoint (Streamable HTTP transport) |
+| `http://localhost:8000/health` | Health check |
+| `http://localhost:8000/.well-known/oauth-authorization-server` | OAuth discovery (RFC 8414) |
+| `http://localhost:8000/.well-known/openid-configuration` | OIDC discovery alias |
+| `http://localhost:8000/.well-known/oauth-protected-resource` | Protected resource metadata (RFC 9470) |
+| `http://localhost:8000/oauth/authorize` | OAuth authorization |
+| `http://localhost:8000/oauth/callback` | Salesforce callback |
+| `http://localhost:8000/oauth/token` | Token exchange |
+| `http://localhost:8000/oauth/register` | Dynamic client registration (RFC 7591) |
 
 ### Connecting an MCP Client
 
@@ -194,7 +202,7 @@ Any MCP-compatible client that supports Streamable HTTP transport and OAuth 2.0 
 5. Exchange the code for an access token via `POST /oauth/token`
 6. Use the access token as a `Bearer` header on all MCP tool calls to `/mcp`
 
-**Example with Claude Desktop:** Configure your `claude_desktop_config.json` to point to `http://localhost:8000/mcp` as a Streamable HTTP MCP server. Claude will handle the OAuth flow automatically.
+**Claude Desktop / Claude.ai:** Add as a remote MCP connector using the server URL (e.g., `http://localhost:8000/mcp` for local, or the Lambda Function URL for production). Claude handles the OAuth flow automatically.
 
 ---
 
@@ -202,17 +210,38 @@ Any MCP-compatible client that supports Streamable HTTP transport and OAuth 2.0 
 
 ### Infrastructure Overview
 
-The Terraform configuration in `infra/terraform/` provisions three module groups:
+The Terraform configuration in `infra/terraform/` provisions everything needed for a self-contained Lambda deployment:
 
 | Module | Resources Created |
 |---|---|
-| **foundation** | ECR repository, Secrets Manager secret, IAM execution role (AgentCore + ECS), IAM CodeBuild role, S3 bucket for CodeBuild sources |
-| **agentcore** | CloudWatch log group, Bedrock AgentCore runtime (via AWS CLI `null_resource`), optional CodeBuild project |
-| **monitoring** | SNS topic (with optional email subscription), CloudWatch dashboard with log widget |
+| **foundation** | Secrets Manager secret (empty — values managed via Console) |
+| **mcp_server** (`modules/oauth_proxy`) | IAM role + policies, Lambda function (ARM64, Python 3.13), Function URL (public), CloudWatch log group |
+| **monitoring** | SNS topic (optional email subscription), CloudWatch dashboard |
 
-The AgentCore runtime is managed via `null_resource` provisioners using the AWS CLI because the Terraform AWS provider does not yet have native AgentCore support. The `external` data source queries the runtime status after creation.
+The Lambda function name is derived from `${project_name}-${environment}` (e.g., `salesforce-mcp-server-prod`). This same pattern applies to the IAM role, log group, and dashboard.
 
-### Step 1: Configure Terraform Variables
+### Step 1: Build the Lambda Zip
+
+```bash
+# On macOS/Linux
+bash build-lambda.sh
+
+# On Windows (PowerShell)
+uv pip install `
+  --python-platform manylinux2014_aarch64 `
+  --target .lambda-build `
+  --python-version 3.13 `
+  --only-binary :all: `
+  mangum httpx starlette anyio cryptography python-multipart `
+  pydantic pydantic-settings python-dotenv boto3 mcp uvicorn
+
+Copy-Item -Recurse -Force mcp_server .lambda-build\mcp_server
+Compress-Archive -Path .lambda-build\* -DestinationPath lambda.zip -Force
+```
+
+This produces `lambda.zip` (~23 MB) containing all runtime dependencies compiled for Lambda's ARM64 Python 3.13 environment plus the `mcp_server/` package. The Lambda handler is `mcp_server.server.handler`.
+
+### Step 2: Configure Terraform Variables
 
 ```bash
 cd infra/terraform
@@ -225,103 +254,115 @@ Edit `terraform.tfvars`:
 # Required
 project_name = "salesforce-mcp-server"
 
-# Optional overrides
-# aws_region          = "us-east-2"
-# environment         = "dev"
-# container_image_tag = "latest"
-# alarm_email         = "alerts@example.com"
+# Optional — customize for your environment
+# aws_region      = "us-east-2"
+# environment     = "prod"
+# alarm_email     = "alerts@example.com"
 
-# Salesforce Connected App credentials (stored in Secrets Manager)
-salesforce_instance_url  = "https://myorg.my.salesforce.com"
-salesforce_login_url     = "https://login.salesforce.com"
-salesforce_client_id     = "<Connected App consumer key>"
-salesforce_client_secret = "<Connected App consumer secret>"
-# salesforce_api_version      = "v66.0"
-# salesforce_access_token_ttl = 7200
-
-# MCP credentials (stored in Secrets Manager)
-mcp_jwt_secret = "<generate with: python -c \"import secrets; print(secrets.token_hex(32))\">"
-mcp_base_url   = "https://<your-agentcore-endpoint>"
-
-# If you already have an IAM role for AgentCore (e.g., from another deployment)
-# execution_role_arn = "arn:aws:iam::123456789012:role/ExistingRole"
+# Lambda deployment (local zip or S3)
+lambda_zip_path = "../../lambda.zip"
+# lambda_s3_bucket = "my-deployment-bucket"
+# lambda_s3_key    = "salesforce-mcp-server/lambda.zip"
 ```
 
-> **Note:** Sensitive values (`salesforce_client_id`, `salesforce_client_secret`, `mcp_jwt_secret`) are written to AWS Secrets Manager by Terraform and loaded at container startup. They are never baked into the container image.
+For team or production environments, uncomment the **S3 backend** block in `main.tf` to enable remote state with locking:
 
-### Step 2: Deploy Infrastructure
+```hcl
+backend "s3" {
+  bucket         = "your-terraform-state-bucket"
+  key            = "mcp-server/terraform.tfstate"
+  region         = "us-east-2"
+  dynamodb_table = "terraform-locks"
+  encrypt        = true
+}
+```
+
+### Step 3: Deploy Infrastructure
 
 ```bash
 cd infra/terraform
 
-# Initialize Terraform (downloads providers)
 terraform init
-
-# Preview what will be created
 terraform plan
-
-# Apply (creates ECR, Secrets Manager, IAM roles, AgentCore runtime, CloudWatch)
 terraform apply
 ```
 
 After `terraform apply` completes, note the outputs:
 
 ```
-ecr_repository_url          = "<account>.dkr.ecr.us-east-2.amazonaws.com/bedrock-agentcore-salesforce-mcp-server-dev"
-agentcore_runtime_id        = "<runtime-id>"
-agentcore_runtime_arn       = "arn:aws:bedrock-agentcore:us-east-2:<account>:runtime/<runtime-name>"
-agentcore_execution_role_arn = "arn:aws:iam::<account>:role/AgentCoreExecutionRole-..."
-secrets_arn                 = "arn:aws:secretsmanager:us-east-2:<account>:secret:mcp/..."
+function_url    = "https://<id>.lambda-url.<region>.on.aws/"
+mcp_server_url  = "https://<id>.lambda-url.<region>.on.aws/mcp"
+secrets_arn     = "arn:aws:secretsmanager:<region>:<account>:secret:mcp/..."
+lambda_role_arn = "arn:aws:iam::<account>:role/salesforce-mcp-server-prod-role"
+function_name   = "salesforce-mcp-server-prod"
 ```
 
-### Step 3: Build and Push the Container
+### Step 4: Populate Secrets Manager
+
+Terraform creates the secret but leaves it **empty**. Go to the AWS Console and add these key/value pairs:
+
+| Key | Value | Required |
+|---|---|---|
+| `SALESFORCE_INSTANCE_URL` | `https://myorg.my.salesforce.com` | Yes |
+| `SALESFORCE_LOGIN_URL` | `https://login.salesforce.com` (or `https://test.salesforce.com` for sandbox) | Yes |
+| `SALESFORCE_CLIENT_ID` | Connected App consumer key | Yes |
+| `SALESFORCE_CLIENT_SECRET` | Connected App consumer secret | Yes |
+| `SALESFORCE_API_VERSION` | `v66.0` | Yes |
+| `SALESFORCE_ACCESS_TOKEN_TTL` | `7200` (seconds) | Yes |
+| `MCP_JWT_SECRET` | Random hex string (see [Configuration](#configuration)) | Yes |
+| `MCP_BASE_URL` | The `function_url` from Terraform output (e.g., `https://<id>.lambda-url.<region>.on.aws/`) | Yes |
+
+> **Important:** After updating secrets, force a Lambda cold start so it picks up the new values. The simplest way is to update the function's description via CLI: `aws lambda update-function-configuration --function-name <name> --description "refreshed secrets"`
+
+### Step 5: Update Salesforce Connected App
+
+Set the callback URL in your Connected App to:
+
+```
+https://<lambda-function-url>/oauth/callback
+```
+
+Use the `function_url` value from the Terraform output.
+
+### Step 6: Verify the Deployment
 
 ```bash
-# Authenticate Docker with ECR
-aws ecr get-login-password --region us-east-2 | \
-  docker login --username AWS --password-stdin <account>.dkr.ecr.us-east-2.amazonaws.com
+# Health check
+curl https://<function-url>/health
+# Expected: {"status":"ok","server":"salesforce-mcp-server"}
 
-# Build the image
-docker build -t <ecr-url>:latest .
+# OAuth discovery
+curl https://<function-url>/.well-known/oauth-authorization-server
+# Expected: JSON with authorization_endpoint, token_endpoint, etc.
 
-# Push to ECR
-docker push <ecr-url>:latest
+# Connect in Claude using:
+# https://<function-url>/mcp
 ```
 
-Replace `<ecr-url>` with the `ecr_repository_url` output from Terraform.
+### Quick Deploy via CLI (Existing Lambda)
 
-**Alternative: CodeBuild.** If Terraform created a CodeBuild project (when `execution_role_arn` is empty), you can trigger a build:
+If the infrastructure already exists and you just need to update the code:
 
 ```bash
-# Zip the source and upload to S3
-zip -r source.zip . -x ".git/*" ".terraform/*" "*.tfstate*"
-aws s3 cp source.zip s3://<codebuild-source-bucket>/source.zip
+# Build and deploy in one step
+make deploy
 
-# Start the build
-aws codebuild start-build --project-name bedrock-agentcore-salesforce-mcp-server-dev-builder
+# Or manually
+bash build-lambda.sh
+aws lambda update-function-code \
+  --function-name salesforce-mcp-server-prod \
+  --zip-file fileb://lambda.zip \
+  --region us-east-2 \
+  --profile your-profile
 ```
 
-### Step 4: Verify the Deployment
-
-The `tests/test_deployed.py` script sends SigV4-signed requests to your AgentCore runtime to verify it's running:
-
-```bash
-# Ensure AWS credentials are configured
-python tests/test_deployed.py
-```
-
-This script tests:
-1. `GET /health` — basic reachability
-2. `POST` MCP `initialize` — JSON-RPC protocol handshake
-3. `POST` with `X-Forwarded-Path` header — path-based routing
-
-> **Important:** Update the `RUNTIME_ARN` constant in the script to match your deployed runtime ARN from the Terraform output.
+The Makefile defaults can be overridden: `make deploy FUNCTION_NAME=my-func REGION=us-west-2 PROFILE=prod`.
 
 ---
 
 ## MCP Tools Reference
 
-All tools call the Salesforce REST API at `/services/data/v66.0/` using the session user's access token. If the user lacks permission for an object or field, the Salesforce error is surfaced as-is to the MCP client.
+All tools call the Salesforce REST API using the session user's access token. If the user lacks permission for an object or field, the Salesforce error is surfaced as-is to the MCP client.
 
 ### `soql_query`
 
@@ -431,7 +472,7 @@ Get the currently authenticated Salesforce user's profile information.
 The server acts as an **OAuth 2.0 authorization server proxy**. It doesn't store passwords or manage user accounts — it brokers Salesforce's Authorization Code flow:
 
 ```
-MCP Client                    MCP Server                    Salesforce
+MCP Client                    MCP Server (Lambda)               Salesforce
     │                              │                              │
     │ 1. GET /.well-known/         │                              │
     │    oauth-authorization-server│                              │
@@ -499,94 +540,110 @@ This means tokens are opaque to the MCP client and tamper-proof. Even if interce
 
 ### Sandbox vs. Production
 
-Switching between sandbox and production requires updating four environment variables:
+Switching between sandbox and production requires updating these values in Secrets Manager (or `.env` for local):
 
-| Variable | Production | Sandbox |
+| Key | Production | Sandbox |
 |---|---|---|
 | `SALESFORCE_INSTANCE_URL` | `https://myorg.my.salesforce.com` | `https://myorg--sandbox.sandbox.my.salesforce.com` |
 | `SALESFORCE_LOGIN_URL` | `https://login.salesforce.com` | `https://test.salesforce.com` |
 | `SALESFORCE_CLIENT_ID` | Production Connected App key | Sandbox Connected App key |
 | `SALESFORCE_CLIENT_SECRET` | Production Connected App secret | Sandbox Connected App secret |
 
-For AWS deployments, update these values in Secrets Manager (or re-run `terraform apply` with updated `terraform.tfvars`).
+After updating Secrets Manager, force a Lambda cold start so the new values take effect.
 
 ---
 
 ## Configuration Reference
 
-Configuration is managed via [Pydantic Settings](https://docs.pydantic.dev/latest/concepts/pydantic_settings/) which reads from environment variables and `.env` files. Two settings classes are used:
+### Secrets Manager Keys (Production)
 
-### Salesforce Settings
+On AWS, all configuration is stored in a single Secrets Manager secret and loaded at Lambda cold start. The secret name follows the pattern `mcp/<project-name>/api-keys`.
 
-Environment variable prefix: `SALESFORCE_`
+| Key | Description |
+|---|---|
+| `SALESFORCE_INSTANCE_URL` | Your Salesforce org URL (e.g., `https://myorg.my.salesforce.com`) |
+| `SALESFORCE_LOGIN_URL` | OAuth login endpoint (`https://login.salesforce.com` or `https://test.salesforce.com`) |
+| `SALESFORCE_CLIENT_ID` | Connected App consumer key |
+| `SALESFORCE_CLIENT_SECRET` | Connected App consumer secret |
+| `SALESFORCE_API_VERSION` | Salesforce REST API version (e.g., `v66.0`) |
+| `SALESFORCE_ACCESS_TOKEN_TTL` | Compound token lifetime in seconds before 401 triggers refresh |
+| `MCP_JWT_SECRET` | Secret key for Fernet encryption of OAuth codes and compound tokens |
+| `MCP_BASE_URL` | Public Lambda Function URL (used in OAuth metadata and 401 headers) |
+
+The Lambda function itself has only bootstrap environment variables that tell it where to find the secret:
+
+| Env Var | Value |
+|---|---|
+| `MCP_SECRET_PROVIDER` | `aws` |
+| `MCP_AWS_SECRET_NAME` | `mcp/<project>/api-keys` |
+| `MCP_AWS_SECRET_REGION` | AWS region |
+| `MCP_LOG_LEVEL` | `INFO` |
+| `MCP_LOG_FORMAT` | `json` |
+| `MCP_STATELESS` | `true` |
+
+### Environment Variables (Local)
+
+For local development, configuration is read from a `.env` file. Copy `.env.example` to `.env` and fill in values.
 
 | Variable | Default | Description |
 |---|---|---|
-| `SALESFORCE_INSTANCE_URL` | *(required)* | Your Salesforce org URL (e.g., `https://myorg.my.salesforce.com`) |
-| `SALESFORCE_LOGIN_URL` | `https://login.salesforce.com` | OAuth login endpoint. Use `https://test.salesforce.com` for sandboxes |
+| `SALESFORCE_INSTANCE_URL` | *(required)* | Your Salesforce org URL |
+| `SALESFORCE_LOGIN_URL` | `https://login.salesforce.com` | OAuth login endpoint |
 | `SALESFORCE_CLIENT_ID` | *(required for OAuth)* | Connected App consumer key |
 | `SALESFORCE_CLIENT_SECRET` | *(required for OAuth)* | Connected App consumer secret |
 | `SALESFORCE_API_VERSION` | `v66.0` | Salesforce REST API version |
-| `SALESFORCE_AUTH_TIMEOUT` | `10` | Timeout in seconds for OAuth HTTP calls to Salesforce |
-| `SALESFORCE_ACCESS_TOKEN` | `""` | Direct access token for local dev (bypasses OAuth; used when headers don't contain a Bearer token) |
-| `SALESFORCE_ACCESS_TOKEN_TTL` | `7200` | Compound token lifetime in seconds before 401 triggers refresh |
-
-### MCP Server Settings
-
-Environment variable prefix: `MCP_`
-
-| Variable | Default | Description |
-|---|---|---|
+| `SALESFORCE_ACCESS_TOKEN` | `""` | Direct access token for local dev (bypasses OAuth) |
+| `SALESFORCE_ACCESS_TOKEN_TTL` | `7200` | Compound token lifetime in seconds |
+| `SALESFORCE_AUTH_TIMEOUT` | `10` | Timeout for OAuth HTTP calls to Salesforce |
 | `MCP_SERVER_NAME` | `salesforce-mcp-server` | Server name (appears in logs and MCP metadata) |
 | `MCP_SERVER_VERSION` | `1.0.0` | Server version |
 | `MCP_HOST` | `0.0.0.0` | Bind address |
 | `MCP_PORT` | `8000` | Bind port |
-| `MCP_PATH` | `/mcp` | Streamable HTTP path for MCP protocol |
+| `MCP_PATH` | `/mcp` | Streamable HTTP path |
 | `MCP_STATELESS` | `true` | Stateless mode for horizontal scaling |
 | `MCP_LOG_LEVEL` | `INFO` | Logging verbosity (`DEBUG`, `INFO`, `WARNING`, `ERROR`) |
-| `MCP_LOG_FORMAT` | `json` | Log format: `json` (structured for CloudWatch) or `text` (human-readable for local dev) |
-| `MCP_BASE_URL` | `http://localhost:8000` | Public base URL (used in OAuth metadata and 401 response headers) |
-| `MCP_JWT_SECRET` | `""` | Secret key for Fernet encryption of OAuth codes and compound tokens |
+| `MCP_LOG_FORMAT` | `json` | `json` (structured) or `text` (human-readable) |
+| `MCP_BASE_URL` | `http://localhost:8000` | Public base URL (used in OAuth metadata) |
+| `MCP_JWT_SECRET` | `""` | Fernet encryption key |
 | `MCP_AUTH_CODE_TTL` | `300` | Authorization code lifetime in seconds |
-| `MCP_SECRET_PROVIDER` | `local` | `local` (reads from `.env`) or `aws` (loads from Secrets Manager at startup) |
-| `MCP_AWS_SECRET_NAME` | `mcp/api-keys` | AWS Secrets Manager secret name (only used when `MCP_SECRET_PROVIDER=aws`) |
+| `MCP_SECRET_PROVIDER` | `local` | `local` (reads `.env`) or `aws` (loads from Secrets Manager) |
+| `MCP_AWS_SECRET_NAME` | `mcp/api-keys` | Secrets Manager secret name (only when `aws`) |
 | `MCP_AWS_SECRET_REGION` | `us-east-2` | AWS region for Secrets Manager |
-
-### Environment File Templates
-
-- **`.env.local.example`** — Template for local development. Uses `MCP_SECRET_PROVIDER=local`, `MCP_LOG_FORMAT=text`, and `MCP_LOG_LEVEL=DEBUG`.
-- **`.env.example`** — Template for AWS deployment. Uses `MCP_SECRET_PROVIDER=aws`, `MCP_LOG_FORMAT=json`, and references Secrets Manager for all sensitive values.
 
 ---
 
 ## Testing
 
-The project uses [pytest](https://docs.pytest.org/) with [pytest-asyncio](https://github.com/pytest-dev/pytest-asyncio) for async test support and [pytest-cov](https://github.com/pytest-dev/pytest-cov) for coverage reporting.
+The project uses [pytest](https://docs.pytest.org/) with [pytest-asyncio](https://github.com/pytest-dev/pytest-asyncio) for async test support and [pytest-cov](https://github.com/pytest-dev/pytest-cov) for coverage reporting. The unit test suite contains **63 tests** covering tools, auth, OAuth routes, middleware, and secrets loading.
 
 ### Unit Tests
 
-Unit tests mock the Salesforce client and verify each MCP tool calls the correct client method with the correct arguments.
-
 ```bash
-# Run unit tests
 make test-unit
 
 # Or directly
 uv run pytest tests/unit -v
 ```
 
-Unit tests are in `tests/unit/test_tools.py` and cover all seven tools. Shared fixtures (`mock_salesforce_client`, `mock_context`, `patch_get_client`) are defined in `tests/conftest.py`.
+Unit tests are organized by module:
+
+| Test File | What It Covers | Tests |
+|---|---|---|
+| `test_tools.py` | All 7 MCP tools (SOQL, SOSL, describe, get record, etc.) | 8 |
+| `test_auth.py` | Fernet token encode/decode, auth codes, OAuth state, Bearer parsing, `get_salesforce_client`, SF token exchange/refresh | 26 |
+| `test_oauth_routes.py` | OAuth discovery (RFC 8414/9470), OIDC alias, dynamic registration, authorize redirect, callback, token exchange (auth code + refresh) | 18 |
+| `test_server.py` | `/health` endpoint, `RequireBearerToken` middleware (missing/expired/raw tokens, 401 responses), `_load_aws_secrets()` (happy path, ClientError, invalid JSON, missing keys) | 11 |
+
+Shared fixtures (`mock_salesforce_client`, `mock_context`, `patch_get_client`) are defined in `tests/conftest.py`.
 
 ### Integration Tests
 
 Integration tests run against a **real Salesforce org**. They require a valid access token.
 
 ```bash
-# Set your token and Salesforce instance URL
 export SALESFORCE_ACCESS_TOKEN=<your-salesforce-access-token>
 export SALESFORCE_INSTANCE_URL=https://myorg--sandbox.sandbox.my.salesforce.com
 
-# Run integration tests
 make test-int
 
 # Or directly
@@ -595,28 +652,16 @@ uv run pytest tests/integration -v
 
 Integration tests are automatically **skipped** if `SALESFORCE_ACCESS_TOKEN` is not set.
 
-### Deployed Server Tests
-
-The `tests/test_deployed.py` script validates a deployed AgentCore runtime by sending SigV4-signed HTTP requests:
-
-```bash
-# Ensure AWS credentials are configured (aws configure or SSO)
-python tests/test_deployed.py
-```
-
-Before running, update the `RUNTIME_ARN` constant in the script to match your runtime from the Terraform `agentcore_runtime_arn` output.
-
 ### Run All Tests
 
 ```bash
-# Run everything (unit + integration if token is set)
 make test
 
 # Or directly with coverage
 uv run pytest
 ```
 
-Coverage is reported automatically via `pytest-cov` (configured in `pyproject.toml`).
+Coverage is reported automatically via `pytest-cov` (configured in `pyproject.toml`). Current unit test coverage is approximately **81%**.
 
 ---
 
@@ -626,7 +671,8 @@ Coverage is reported automatically via `pytest-cov` (configured in `pyproject.to
 salesforce-mcp-server/
 ├── mcp_server/                    # Python package — the MCP server
 │   ├── __init__.py                # Package init (exports __version__)
-│   ├── server.py                  # Entry point: Starlette app, FastMCP, middleware, lifespan
+│   ├── server.py                  # Entry point: Starlette app, FastMCP, middleware,
+│   │                              #   Mangum Lambda handler, lifespan, /health
 │   ├── config/
 │   │   ├── __init__.py            # Exports settings singletons
 │   │   └── settings.py            # Pydantic Settings classes (SalesforceSettings, MCPSettings)
@@ -647,29 +693,31 @@ salesforce-mcp-server/
 │       ├── get_related_records.py # Related/child record fetch
 │       └── get_user_info.py       # Authenticated user profile
 │
-├── tests/                         # Test suite
+├── tests/                         # Test suite (63 unit tests, ~81% coverage)
 │   ├── __init__.py
 │   ├── conftest.py                # Shared pytest fixtures (mock client, mock context)
-│   ├── test_deployed.py           # SigV4-signed smoke test for deployed AgentCore runtime
 │   ├── unit/
 │   │   ├── __init__.py
-│   │   └── test_tools.py          # Unit tests for all 7 MCP tools
+│   │   ├── test_tools.py          # Unit tests for all 7 MCP tools
+│   │   ├── test_auth.py           # Fernet tokens, OAuth state, Bearer parsing, SF exchange
+│   │   ├── test_oauth_routes.py   # OAuth discovery, authorize, callback, token endpoints
+│   │   └── test_server.py         # /health, RequireBearerToken middleware, _load_aws_secrets
 │   └── integration/
 │       ├── __init__.py
 │       └── test_server.py         # Integration tests against a real Salesforce org
 │
 ├── infra/                         # Infrastructure as Code
 │   └── terraform/
-│       ├── main.tf                # Root module — wires foundation, agentcore, monitoring
-│       ├── variables.tf           # Input variables (region, project, SF creds, etc.)
-│       ├── outputs.tf             # Outputs (ECR URL, runtime ARN, secrets ARN, next steps)
+│       ├── main.tf                # Root module — wires foundation, mcp_server, monitoring
+│       ├── variables.tf           # Input variables (region, project name, environment)
+│       ├── outputs.tf             # Outputs (function URL, secrets ARN, role ARN)
 │       ├── terraform.tfvars.example # Template for variable values
 │       └── modules/
-│           ├── foundation/        # ECR, Secrets Manager, IAM roles, CodeBuild role, S3
+│           ├── foundation/        # Secrets Manager secret
 │           │   ├── main.tf
 │           │   ├── variables.tf
 │           │   └── outputs.tf
-│           ├── agentcore/         # AgentCore runtime (AWS CLI), CloudWatch logs, CodeBuild
+│           ├── oauth_proxy/       # Lambda function, Function URL, IAM role, log group
 │           │   ├── main.tf
 │           │   ├── variables.tf
 │           │   └── outputs.tf
@@ -678,35 +726,13 @@ salesforce-mcp-server/
 │               ├── variables.tf
 │               └── outputs.tf
 │
-├── .bedrock_agentcore.yaml        # AgentCore deployment configuration
-├── .env.example                   # Environment template for AWS deployment
-├── .env.local.example             # Environment template for local development
+├── .env.example                   # Environment template for local development
 ├── .gitignore                     # Git ignore rules
-├── Dockerfile                     # Production container (Python 3.13-slim + uv)
-├── Makefile                       # Development task runner
+├── build-lambda.sh                # Build script for Lambda deployment zip (ARM64, Python 3.13)
+├── Makefile                       # Development and deployment task runner
 ├── pyproject.toml                 # Project metadata, dependencies, tool config
 └── uv.lock                        # Locked dependency versions
 ```
-
----
-
-## Docker
-
-The `Dockerfile` produces a production-ready container based on `python:3.13-slim`:
-
-```bash
-# Build
-docker build -t salesforce-mcp-server:latest .
-
-# Run locally with your .env file
-docker run -p 8000:8000 --env-file .env salesforce-mcp-server:latest
-```
-
-Key aspects of the Docker build:
-- Uses **multi-stage layer caching**: dependency files (`pyproject.toml`, `uv.lock`) are copied first and installed before application code, so code changes don't invalidate the dependency layer.
-- Installs [uv](https://github.com/astral-sh/uv) from the official image (`ghcr.io/astral-sh/uv:latest`) for fast, reproducible installs.
-- Sets `MCP_SECRET_PROVIDER=aws` and `MCP_AWS_SECRET_NAME=mcp/salesforce-mcp-server/api-keys` by default — override via environment variables for local Docker runs.
-- Health check runs `curl -f http://localhost:8000/health` every 30 seconds.
 
 ---
 
@@ -725,9 +751,9 @@ Key aspects of the Docker build:
 | `make test-int` | Run integration tests (requires `SALESFORCE_ACCESS_TOKEN`) |
 | `make lint` | Run ruff linter |
 | `make format` | Auto-fix lint issues and format code |
-| `make build` | Build the Docker image |
-| `make deploy` | Run `terraform init && terraform apply` in `infra/terraform/` |
-| `make clean` | Remove `__pycache__`, `.pytest_cache`, `.ruff_cache` |
+| `make build` | Build Lambda deployment zip via `build-lambda.sh` |
+| `make deploy` | Build zip and deploy to Lambda (configurable: `FUNCTION_NAME`, `REGION`, `PROFILE`) |
+| `make clean` | Remove caches, build artifacts, and `lambda.zip` |
 
 ### Code Quality
 
@@ -787,13 +813,28 @@ def register_tools(mcp: FastMCP) -> None:
 
 ## Design Decisions
 
+### Lambda over Containers
+
+The server runs as a single AWS Lambda function behind a Function URL rather than a containerized service. This provides:
+- **Zero idle cost** — Lambda scales to zero when not in use.
+- **No infrastructure management** — no ECS clusters, load balancers, or VPCs to maintain.
+- **Sub-second warm invocations** — after the initial cold start (~3-5s), warm requests complete in milliseconds.
+- **Automatic scaling** — Lambda handles concurrency natively.
+
 ### Stateless Architecture
 
-The server runs in **stateless mode** (`MCP_STATELESS=true`) for AgentCore compatibility:
+The server runs in **stateless mode** (`MCP_STATELESS=true`):
 - No in-memory caching or sessions between requests.
-- Each request may be handled by a different container instance.
-- The Salesforce Bearer token is extracted and decrypted from each request independently.
-- This enables horizontal scaling with zero coordination between instances.
+- Each Lambda invocation handles exactly one request independently.
+- The Salesforce Bearer token is extracted and decrypted from each request.
+- This enables Lambda to spin up as many concurrent instances as needed with zero coordination.
+
+### Centralized Configuration via Secrets Manager
+
+All configuration — including non-sensitive values like API versions — is stored in a single Secrets Manager secret. This provides:
+- **One place to update** — no redeployments needed for config changes (just force a cold start).
+- **Audit trail** — Secrets Manager logs all access via CloudTrail.
+- **No secrets in code or environment variables** — Lambda env vars only contain bootstrap pointers to the secret.
 
 ### Per-User Authentication
 
@@ -808,7 +849,7 @@ All tools are read-only by design. The server does not expose any create, update
 
 ### DNS Rebinding Protection Disabled
 
-DNS rebinding protection is explicitly disabled in the FastMCP `TransportSecuritySettings`. This is required for AgentCore deployments where internal routing uses hostnames that would be rejected by default Host header validation. Since the server runs behind AWS IAM authentication in production, this is safe.
+DNS rebinding protection is explicitly disabled in the FastMCP `TransportSecuritySettings`. This is required for Lambda Function URLs where internal routing uses hostnames that would be rejected by default Host header validation. Since the server handles its own OAuth authentication at the application layer, this is safe.
 
 ### Fernet over JWT
 
